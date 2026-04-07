@@ -1,0 +1,5 @@
+useDynLib(statlibR, .registration = TRUE)
+export(jols_fit_xy)
+export(jridge_fit_xy)
+export(backend_path)
+export(backend_status)

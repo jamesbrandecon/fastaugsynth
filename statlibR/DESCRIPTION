@@ -1,0 +1,14 @@
+Package: statlibR
+Type: Package
+Title: R Front End for Compiled Julia Statistical Backend
+Version: 0.1.0
+Authors@R: person("jlrstats", "contributors", email = "noreply@example.com", role = c("aut", "cre"))
+Description: Prototype R interface for OLS using a precompiled Julia backend.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Imports:
+    stats
+Suggests:
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3

@@ -1,0 +1,75 @@
+name: phase1-no-julia-runtime
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+jobs:
+  build-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.10'
+      - name: Test Julia backend package
+        run: julia --project=backend -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+      - name: Build Julia backend shared library
+        run: |
+          julia --project=backend backend/build/build_backend.jl
+          backend/build/package_backend.sh
+      - name: Upload backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: statlibbackend-linux-x86_64
+          path: |
+            backend/build/artifacts/*.tar.gz
+            backend/build/artifacts/*.sha256
+
+  verify-without-julia:
+    runs-on: ubuntu-latest
+    needs: build-backend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Confirm no Julia in runtime job
+        run: |
+          if command -v julia >/dev/null 2>&1; then
+            echo "Julia is unexpectedly present in verify job" >&2
+            exit 1
+          fi
+          echo "Julia is not installed in verify job (expected)."
+      - name: Setup R
+        uses: r-lib/actions/setup-r@v2
+      - name: Install R dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: any::testthat
+      - name: Download backend artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: statlibbackend-linux-x86_64
+          path: backend-artifact
+      - name: Unpack backend artifact
+        run: |
+          mkdir -p "$HOME/.cache/statlibR/backend"
+          tar -xzf backend-artifact/statlibbackend-linux-x86_64.tar.gz -C "$HOME/.cache/statlibR/backend"
+          find "$HOME/.cache/statlibR/backend" -maxdepth 3 -type f
+      - name: Install and test R package using backend (without Julia)
+        env:
+          STATLIB_BACKEND_LIB: ${{ runner.temp }}/libpath-placeholder
+        run: |
+          LIB=$(find "$HOME/.cache/statlibR/backend" -name 'libstatlibbackend.so' | head -n 1)
+          if [ -z "$LIB" ]; then
+            echo "libstatlibbackend.so not found" >&2
+            exit 1
+          fi
+          echo "Using backend library: $LIB"
+          export STATLIB_BACKEND_LIB="$LIB"
+          R CMD INSTALL statlibR
+          Rscript -e 'stopifnot(Sys.which("julia") == "")'
+          Rscript -e 'library(statlibR); set.seed(42); X <- cbind(1, matrix(rnorm(400), ncol = 4)); y <- X %*% c(1,2,3,4,5) + rnorm(100); fit <- jols_fit_xy(X, as.vector(y)); ref <- lm.fit(X, as.vector(y)); stopifnot(max(abs(fit$coefficients - unname(ref$coefficients))) < 1e-8)'
+          Rscript -e 'library(testthat); testthat::test_dir("statlibR/tests/testthat")'
