@@ -10,10 +10,16 @@ mkpath(out_dir)
 
 create_library(project_dir, out_dir;
     lib_name = "statlibbackend",
-    precompile_execution_file = nothing,
     incremental = false,
     force = true,
     filter_stdlibs = false,
 )
+
+if Sys.isapple()
+    lib_path = joinpath(out_dir, "lib", "libstatlibbackend.dylib")
+    for rpath in ("@loader_path", "@loader_path/julia")
+        run(`install_name_tool -add_rpath $rpath $lib_path`)
+    end
+end
 
 println("Built backend library in: ", out_dir)

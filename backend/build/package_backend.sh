@@ -18,6 +18,14 @@ if [ ! -d "$DIST_DIR" ]; then
 fi
 
 tar -C "$DIST_DIR" -czf "$OUT_DIR/$ASSET" .
-sha256sum "$OUT_DIR/$ASSET" > "$OUT_DIR/$ASSET.sha256"
+
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum "$OUT_DIR/$ASSET" > "$OUT_DIR/$ASSET.sha256"
+elif command -v shasum >/dev/null 2>&1; then
+  shasum -a 256 "$OUT_DIR/$ASSET" > "$OUT_DIR/$ASSET.sha256"
+else
+  echo "Neither sha256sum nor shasum is available" >&2
+  exit 1
+fi
 
 echo "$OUT_DIR/$ASSET"

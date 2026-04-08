@@ -17,12 +17,26 @@ typedef int (*fit_ridge_loocv_dense_fn)(int, int,
                                         double*, double*, double*,
                                         char*, int);
 
+static void* backend_handle = NULL;
+static fit_ols_dense_fn fit_ols_dense_ptr = NULL;
+static fit_ridge_loocv_dense_fn fit_ridge_loocv_dense_ptr = NULL;
+static char backend_libpath[4096] = "";
+
 static void* load_backend(const char* libpath) {
-  void* h = dlopen(libpath, RTLD_NOW | RTLD_LOCAL);
-  if (h == NULL) {
+  if (backend_handle != NULL) {
+    if (strcmp(backend_libpath, libpath) != 0) {
+      Rf_error("Backend already loaded from '%s'; cannot switch to '%s' in the same R session", backend_libpath, libpath);
+    }
+    return backend_handle;
+  }
+
+  backend_handle = dlopen(libpath, RTLD_NOW | RTLD_GLOBAL);
+  if (backend_handle == NULL) {
     Rf_error("Failed to load backend library at '%s': %s", libpath, dlerror());
   }
-  return h;
+
+  snprintf(backend_libpath, sizeof(backend_libpath), "%s", libpath);
+  return backend_handle;
 }
 
 SEXP C_jols_fit_xy(SEXP X_, SEXP y_, SEXP libpath_) {
@@ -38,9 +52,10 @@ SEXP C_jols_fit_xy(SEXP X_, SEXP y_, SEXP libpath_) {
   const char* libpath = CHAR(STRING_ELT(libpath_, 0));
   void* h = load_backend(libpath);
 
-  fit_ols_dense_fn fit = (fit_ols_dense_fn)dlsym(h, "fit_ols_dense");
-  if (fit == NULL) {
-    dlclose(h);
+  if (fit_ols_dense_ptr == NULL) {
+    fit_ols_dense_ptr = (fit_ols_dense_fn)dlsym(h, "fit_ols_dense");
+  }
+  if (fit_ols_dense_ptr == NULL) {
     Rf_error("Symbol fit_ols_dense not found in backend library");
   }
 
@@ -51,9 +66,7 @@ SEXP C_jols_fit_xy(SEXP X_, SEXP y_, SEXP libpath_) {
 
   char errbuf[512];
   memset(errbuf, 0, sizeof(errbuf));
-  int status = fit(n, p, REAL(X_), REAL(y_), REAL(coef), REAL(sigma2), INTEGER(df_resid), REAL(rss), errbuf, 512);
-
-  dlclose(h);
+  int status = fit_ols_dense_ptr(n, p, REAL(X_), REAL(y_), REAL(coef), REAL(sigma2), INTEGER(df_resid), REAL(rss), errbuf, 512);
   if (status != 0) Rf_error("Backend fit_ols_dense failed with status %d: %s", status, errbuf);
 
   SEXP out = PROTECT(Rf_allocVector(VECSXP, 4));
@@ -89,9 +102,10 @@ SEXP C_jridge_fit_xy(SEXP X_, SEXP y_, SEXP lambdas_, SEXP libpath_) {
   const char* libpath = CHAR(STRING_ELT(libpath_, 0));
   void* h = load_backend(libpath);
 
-  fit_ridge_loocv_dense_fn fit = (fit_ridge_loocv_dense_fn)dlsym(h, "fit_ridge_loocv_dense");
-  if (fit == NULL) {
-    dlclose(h);
+  if (fit_ridge_loocv_dense_ptr == NULL) {
+    fit_ridge_loocv_dense_ptr = (fit_ridge_loocv_dense_fn)dlsym(h, "fit_ridge_loocv_dense");
+  }
+  if (fit_ridge_loocv_dense_ptr == NULL) {
     Rf_error("Symbol fit_ridge_loocv_dense not found in backend library");
   }
 
@@ -101,9 +115,7 @@ SEXP C_jridge_fit_xy(SEXP X_, SEXP y_, SEXP lambdas_, SEXP libpath_) {
 
   char errbuf[512];
   memset(errbuf, 0, sizeof(errbuf));
-  int status = fit(n, p, REAL(X_), REAL(y_), nlambda, REAL(lambdas_), REAL(coef), REAL(best_lambda), REAL(loocv_mse), errbuf, 512);
-
-  dlclose(h);
+  int status = fit_ridge_loocv_dense_ptr(n, p, REAL(X_), REAL(y_), nlambda, REAL(lambdas_), REAL(coef), REAL(best_lambda), REAL(loocv_mse), errbuf, 512);
   if (status != 0) Rf_error("Backend fit_ridge_loocv_dense failed with status %d: %s", status, errbuf);
 
   SEXP out = PROTECT(Rf_allocVector(VECSXP, 3));

@@ -1,5 +1,6 @@
 using Test
 using LinearAlgebra
+using Statistics
 using StatlibBackend
 
 @testset "OLS ABI" begin
@@ -14,9 +15,9 @@ using StatlibBackend
     rss = Ref{Float64}(0.0)
     err = zeros(UInt8, 512)
 
-    status = StatlibBackend.fit_ols_dense!(n, p, pointer(X), pointer(y), pointer(coef),
+    status = StatlibBackend.fit_ols_dense!(Cint(n), Cint(p), pointer(X), pointer(y), pointer(coef),
         Base.unsafe_convert(Ptr{Float64}, sigma2), Base.unsafe_convert(Ptr{Cint}, df),
-        Base.unsafe_convert(Ptr{Float64}, rss), pointer(err), 512)
+        Base.unsafe_convert(Ptr{Float64}, rss), pointer(err), Cint(length(err)))
 
     @test status == 0
     @test maximum(abs.(coef .- (X \ y))) < 1e-8
@@ -36,10 +37,10 @@ end
     bestmse = Ref{Float64}(0.0)
     err = zeros(UInt8, 512)
 
-    status = StatlibBackend.fit_ridge_loocv_dense!(n, p,
-        pointer(X), pointer(y), length(λgrid), pointer(λgrid),
+    status = StatlibBackend.fit_ridge_loocv_dense!(Cint(n), Cint(p),
+        pointer(X), pointer(y), Cint(length(λgrid)), pointer(λgrid),
         pointer(coef), Base.unsafe_convert(Ptr{Float64}, bestλ),
-        Base.unsafe_convert(Ptr{Float64}, bestmse), pointer(err), 512)
+        Base.unsafe_convert(Ptr{Float64}, bestmse), pointer(err), Cint(length(err)))
 
     @test status == 0
     @test bestλ[] in λgrid
