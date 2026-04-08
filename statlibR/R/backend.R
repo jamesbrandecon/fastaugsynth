@@ -138,6 +138,62 @@ backend_token_from_gh <- function() {
   if (nzchar(token)) token else ""
 }
 
+backend_gh <- function() {
+  Sys.which("gh")
+}
+
+github_api_endpoint <- function(url) {
+  sub("^https://api\\.github\\.com/", "", url)
+}
+
+gh_api_request <- function(url,
+                           accept = "application/vnd.github+json",
+                           output = NULL) {
+  gh <- backend_gh()
+  if (!nzchar(gh)) {
+    stop("gh CLI is not available", call. = FALSE)
+  }
+
+  endpoint <- github_api_endpoint(url)
+  args <- c("api", "-X", "GET")
+  if (!is.null(accept) && nzchar(accept)) {
+    args <- c(args, "-H", paste0("Accept:", accept))
+  }
+  args <- c(args, "-H", "X-GitHub-Api-Version:2022-11-28", endpoint)
+
+  stderr_file <- tempfile("metricsjl-gh-stderr-")
+  on.exit(unlink(stderr_file, force = TRUE), add = TRUE)
+
+  status <- suppressWarnings(system2(
+    gh,
+    args,
+    stdout = if (is.null(output)) TRUE else output,
+    stderr = stderr_file
+  ))
+  stderr_text <- paste(readLines(stderr_file, warn = FALSE), collapse = "\n")
+
+  if (!is.null(output)) {
+    if (!identical(status, 0L)) {
+      stop(
+        sprintf("gh api request failed (%s): %s", status, stderr_text),
+        call. = FALSE
+      )
+    }
+    return(invisible(output))
+  }
+
+  stdout_text <- paste(status, collapse = "\n")
+  exit_status <- attr(status, "status")
+  if (!is.null(exit_status) && exit_status != 0L) {
+    stop(
+      sprintf("gh api request failed (%s): %s", exit_status, stdout_text),
+      call. = FALSE
+    )
+  }
+
+  stdout_text
+}
+
 backend_token <- function() {
   token <- Sys.getenv("METRICSJL_GITHUB_PAT", Sys.getenv("GITHUB_PAT", ""))
   if (nzchar(token)) {
@@ -198,12 +254,25 @@ github_headers <- function(token = "", accept = "application/vnd.github+json") {
 }
 
 github_fetch_json <- function(url, token = "") {
-  response <- curl::curl_fetch_memory(
-    url,
-    handle = curl::new_handle(httpheader = github_headers(token))
+  response <- tryCatch(
+    curl::curl_fetch_memory(
+      url,
+      handle = curl::new_handle(httpheader = github_headers(token))
+    ),
+    error = function(e) e
   )
 
+  if (inherits(response, "error")) {
+    if (nzchar(backend_gh())) {
+      return(jsonlite::fromJSON(gh_api_request(url), simplifyVector = TRUE))
+    }
+    stop(conditionMessage(response), call. = FALSE)
+  }
+
   if (response$status_code >= 300L) {
+    if (response$status_code %in% c(401L, 404L) && nzchar(backend_gh())) {
+      return(jsonlite::fromJSON(gh_api_request(url), simplifyVector = TRUE))
+    }
     message <- trimws(rawToChar(response$content))
     if (!nzchar(message)) {
       message <- "empty response body"
@@ -225,14 +294,22 @@ github_fetch_json <- function(url, token = "") {
 }
 
 github_download_file <- function(url, destfile, token = "", accept = "application/octet-stream") {
-  curl::curl_download(
-    url = url,
-    destfile = destfile,
-    handle = curl::new_handle(
-      followlocation = TRUE,
-      httpheader = github_headers(token, accept = accept)
+  tryCatch(
+    curl::curl_download(
+      url = url,
+      destfile = destfile,
+      handle = curl::new_handle(
+        followlocation = TRUE,
+        httpheader = github_headers(token, accept = accept)
+      ),
+      quiet = TRUE
     ),
-    quiet = TRUE
+    error = function(e) {
+      if (nzchar(backend_gh())) {
+        return(gh_api_request(url, accept = NULL, output = destfile))
+      }
+      stop(conditionMessage(e), call. = FALSE)
+    }
   )
 }
 
