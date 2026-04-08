@@ -41,7 +41,7 @@ remotes::install_github(
 library(metricsjl)
 ```
 
-The installed `metricsjl` package will try to fetch a matching backend artifact automatically on load. You can also do it explicitly with `metricsjl::backend_install()`. Artifact downloads reuse `GITHUB_PAT`, `METRICSJL_GITHUB_PAT`, or a token stored with `gitcreds`.
+The installed `metricsjl` package will try to fetch a matching backend artifact automatically on load. You can also do it explicitly with `metricsjl::backend_install()`. Artifact downloads reuse `GITHUB_PAT`, `METRICSJL_GITHUB_PAT`, `gh auth token`, or a token stored with `gitcreds`.
 
 ## Planning
 

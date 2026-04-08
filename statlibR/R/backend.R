@@ -124,8 +124,27 @@ backend_sha <- function() {
   ""
 }
 
+backend_token_from_gh <- function() {
+  gh <- Sys.which("gh")
+  if (!nzchar(gh)) {
+    return("")
+  }
+
+  out <- tryCatch(
+    suppressWarnings(system2(gh, c("auth", "token"), stdout = TRUE, stderr = FALSE)),
+    error = function(e) character()
+  )
+  token <- trimws(paste(out, collapse = "\n"))
+  if (nzchar(token)) token else ""
+}
+
 backend_token <- function() {
   token <- Sys.getenv("METRICSJL_GITHUB_PAT", Sys.getenv("GITHUB_PAT", ""))
+  if (nzchar(token)) {
+    return(token)
+  }
+
+  token <- backend_token_from_gh()
   if (nzchar(token)) {
     return(token)
   }
@@ -222,7 +241,7 @@ backend_install_message <- function() {
     "Backend library is not installed.",
     "Run metricsjl::backend_install() explicitly or set METRICSJL_BACKEND_LIB.",
     "For this private repo, ensure GITHUB_PAT or METRICSJL_GITHUB_PAT has repo access,",
-    "or store a GitHub token with gitcreds::gitcreds_set().",
+    "or log in with gh auth/login, or store a GitHub token with gitcreds::gitcreds_set().",
     sep = " "
   )
 }
