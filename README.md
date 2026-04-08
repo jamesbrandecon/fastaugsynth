@@ -22,7 +22,26 @@ This repository now includes a minimal end-to-end Phase 1 architecture:
 
 ## CI guarantee for "machine without Julia"
 
-The `verify-without-julia` job in the GitHub Actions workflow explicitly checks that `julia` is absent and then runs the R package against the prebuilt backend artifact.
+The `verify-without-julia` job in the GitHub Actions workflow blocks any `julia` execution and then runs the R package against the prebuilt backend artifact.
+
+## Installing From GitHub
+
+The repository is currently private, so a bad or under-scoped token shows up as a GitHub `404`. For the current PR branch, install with a token that has private-repo read access:
+
+```r
+Sys.setenv(
+  GITHUB_PAT = "<token with repo access>",
+  METRICSJL_BACKEND_REF = "codex/prototype-r-package-with-julia-backend"
+)
+remotes::install_github(
+  "jamesbrandecon/jlrstats",
+  subdir = "statlibR",
+  ref = "codex/prototype-r-package-with-julia-backend"
+)
+library(metricsjl)
+```
+
+The installed `metricsjl` package will try to fetch a matching backend artifact automatically on load. You can also do it explicitly with `metricsjl::backend_install()`. Artifact downloads reuse `GITHUB_PAT`, `METRICSJL_GITHUB_PAT`, or a token stored with `gitcreds`.
 
 ## Planning
 

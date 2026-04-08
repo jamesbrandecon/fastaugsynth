@@ -8,6 +8,9 @@ License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
 Imports:
+    curl,
+    gitcreds,
+    jsonlite,
     stats
 Suggests:
     fixest,

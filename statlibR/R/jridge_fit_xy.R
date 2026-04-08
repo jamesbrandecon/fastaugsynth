@@ -10,7 +10,7 @@ jridge_fit_xy <- function(X, y, lambdas = 10 ^ seq(-6, 2, length.out = 64)) {
   if (!is.numeric(lambdas) || length(lambdas) == 0) stop("lambdas must be a non-empty numeric vector", call. = FALSE)
   if (any(!is.finite(lambdas)) || any(lambdas < 0)) stop("lambdas must be finite and non-negative", call. = FALSE)
 
-  out <- .Call(C_jridge_fit_xy, X, as.double(y), as.double(lambdas), backend_path())
+  out <- .Call(C_jridge_fit_xy, X, as.double(y), as.double(lambdas), ensure_backend_available())
   class(out) <- c("jridge_fit", "list")
   out
 }

@@ -1,4 +1,5 @@
 useDynLib(metricsjl, .registration = TRUE)
+export(backend_install)
 export(jols_fit_xy)
 export(jridge_fit_xy)
 export(backend_path)

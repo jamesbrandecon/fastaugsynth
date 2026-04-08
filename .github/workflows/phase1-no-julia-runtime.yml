@@ -10,12 +10,20 @@ on:
 
 jobs:
   build-backend:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            artifact_name: statlibbackend-linux-x86_64
+          - runner: macos-14
+            artifact_name: statlibbackend-darwin-arm64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
         with:
-          version: '1.10'
+          version: 'release'
       - name: Test Julia backend package
         run: julia --project=backend -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
       - name: Build Julia backend shared library
@@ -25,7 +33,7 @@ jobs:
       - name: Upload backend artifact
         uses: actions/upload-artifact@v4
         with:
-          name: statlibbackend-linux-x86_64
+          name: ${{ matrix.artifact_name }}
           path: |
             backend/build/artifacts/*.tar.gz
             backend/build/artifacts/*.sha256
@@ -50,7 +58,7 @@ jobs:
       - name: Install R dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          packages: any::testthat
+          packages: any::curl any::gitcreds any::jsonlite any::testthat
       - name: Download backend artifact
         uses: actions/download-artifact@v4
         with:

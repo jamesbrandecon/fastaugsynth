@@ -5,7 +5,7 @@ jols_fit_xy <- function(X, y) {
   if (!is.numeric(y)) stop("y must be numeric", call. = FALSE)
   if (nrow(X) != length(y)) stop("nrow(X) must match length(y)", call. = FALSE)
 
-  fit <- .Call(C_jols_fit_xy, X, as.double(y), backend_path())
+  fit <- .Call(C_jols_fit_xy, X, as.double(y), ensure_backend_available())
   class(fit) <- c("jols_fit", "list")
   fit
 }

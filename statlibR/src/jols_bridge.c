@@ -17,9 +17,12 @@ typedef int (*fit_ridge_loocv_dense_fn)(int, int,
                                         double*, double*, double*,
                                         char*, int);
 
+typedef void (*init_julia_fn)(int, char**);
+
 static void* backend_handle = NULL;
 static fit_ols_dense_fn fit_ols_dense_ptr = NULL;
 static fit_ridge_loocv_dense_fn fit_ridge_loocv_dense_ptr = NULL;
+static init_julia_fn init_julia_ptr = NULL;
 static char backend_libpath[4096] = "";
 
 static void* load_backend(const char* libpath) {
@@ -33,6 +36,16 @@ static void* load_backend(const char* libpath) {
   backend_handle = dlopen(libpath, RTLD_NOW | RTLD_GLOBAL);
   if (backend_handle == NULL) {
     Rf_error("Failed to load backend library at '%s': %s", libpath, dlerror());
+  }
+
+  init_julia_ptr = (init_julia_fn)dlsym(backend_handle, "init_julia");
+  if (init_julia_ptr == NULL) {
+    Rf_error("Symbol init_julia not found in backend library");
+  }
+
+  {
+    char* julia_argv[] = {"metricsjl", NULL};
+    init_julia_ptr(1, julia_argv);
   }
 
   snprintf(backend_libpath, sizeof(backend_libpath), "%s", libpath);
