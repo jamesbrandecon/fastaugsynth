@@ -1,4 +1,4 @@
 library(testthat)
-library(statlibR)
+library(metricsjl)
 
-test_check("statlibR")
+test_check("metricsjl")

@@ -1,0 +1,8 @@
+generated_at: 2026-04-08 07:50:01 PDT
+backend_lib: /Users/jamesbrand/Dropbox/git_stuff/jlrstats/backend/build/dist/lib/libstatlibbackend.dylib
+reps: 12
+batch_size: 5
+R.version: R version 4.5.2 (2025-10-31)
+platform: aarch64-apple-darwin20
+metricsjl.version: 0.1.0
+fixest.version: 0.13.2

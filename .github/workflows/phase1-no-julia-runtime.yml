@@ -35,13 +35,16 @@ jobs:
     needs: build-backend
     steps:
       - uses: actions/checkout@v4
-      - name: Confirm no Julia in runtime job
+      - name: Block Julia execution in runtime job
         run: |
-          if command -v julia >/dev/null 2>&1; then
-            echo "Julia is unexpectedly present in verify job" >&2
-            exit 1
-          fi
-          echo "Julia is not installed in verify job (expected)."
+          mkdir -p "$RUNNER_TEMP/no-julia/bin"
+          cat > "$RUNNER_TEMP/no-julia/bin/julia" <<'EOF'
+          #!/usr/bin/env bash
+          echo "julia must not be invoked in verify-without-julia" >&2
+          exit 99
+          EOF
+          chmod +x "$RUNNER_TEMP/no-julia/bin/julia"
+          echo "$RUNNER_TEMP/no-julia/bin" >> "$GITHUB_PATH"
       - name: Setup R
         uses: r-lib/actions/setup-r@v2
       - name: Install R dependencies
@@ -55,21 +58,20 @@ jobs:
           path: backend-artifact
       - name: Unpack backend artifact
         run: |
-          mkdir -p "$HOME/.cache/statlibR/backend"
-          tar -xzf backend-artifact/statlibbackend-linux-x86_64.tar.gz -C "$HOME/.cache/statlibR/backend"
-          find "$HOME/.cache/statlibR/backend" -maxdepth 3 -type f
+          mkdir -p "$HOME/.cache/metricsjl/backend"
+          tar -xzf backend-artifact/statlibbackend-linux-x86_64.tar.gz -C "$HOME/.cache/metricsjl/backend"
+          find "$HOME/.cache/metricsjl/backend" -maxdepth 3 -type f
       - name: Install and test R package using backend (without Julia)
         env:
-          STATLIB_BACKEND_LIB: ${{ runner.temp }}/libpath-placeholder
+          METRICSJL_BACKEND_LIB: ${{ runner.temp }}/libpath-placeholder
         run: |
-          LIB=$(find "$HOME/.cache/statlibR/backend" -name 'libstatlibbackend.so' | head -n 1)
+          LIB=$(find "$HOME/.cache/metricsjl/backend" -name 'libstatlibbackend.so' | head -n 1)
           if [ -z "$LIB" ]; then
             echo "libstatlibbackend.so not found" >&2
             exit 1
           fi
           echo "Using backend library: $LIB"
-          export STATLIB_BACKEND_LIB="$LIB"
+          export METRICSJL_BACKEND_LIB="$LIB"
           R CMD INSTALL statlibR
-          Rscript -e 'stopifnot(Sys.which("julia") == "")'
-          Rscript -e 'library(statlibR); set.seed(42); X <- cbind(1, matrix(rnorm(400), ncol = 4)); y <- X %*% c(1,2,3,4,5) + rnorm(100); fit <- jols_fit_xy(X, as.vector(y)); ref <- lm.fit(X, as.vector(y)); stopifnot(max(abs(fit$coefficients - unname(ref$coefficients))) < 1e-8)'
-          Rscript -e 'library(testthat); testthat::test_dir("statlibR/tests/testthat")'
+          Rscript -e 'library(metricsjl); set.seed(42); X <- cbind(1, matrix(rnorm(400), ncol = 4)); y <- X %*% c(1,2,3,4,5) + rnorm(100); fit <- jols_fit_xy(X, as.vector(y)); ref <- lm.fit(X, as.vector(y)); stopifnot(max(abs(fit$coefficients - unname(ref$coefficients))) < 1e-8)'
+          Rscript -e 'library(metricsjl); library(testthat); testthat::test_dir("statlibR/tests/testthat")'

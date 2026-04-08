@@ -7,7 +7,7 @@ Prototype workspace for an R statistical library with a compiled Julia backend.
 This repository now includes a minimal end-to-end Phase 1 architecture:
 
 - `backend/`: Julia backend with C-callable `fit_ols_dense` (OLS) and `fit_ridge_loocv_dense` (ridge + LOOCV tuning) ABIs.
-- `statlibR/`: R package with a thin C shim and low-level `jols_fit_xy(X, y)` plus `jridge_fit_xy(X, y, lambdas)` entrypoints.
+- `statlibR/`: source tree for the `metricsjl` R package, with a thin C shim and low-level `jols_fit_xy(X, y)` plus `jridge_fit_xy(X, y, lambdas)` entrypoints.
 - `.github/workflows/phase1-no-julia-runtime.yml`: CI pipeline that:
   1. builds the Julia shared library artifact in one job, and then
   2. validates R package installation and OLS fit correctness in a separate job **without Julia installed**.
@@ -16,7 +16,7 @@ This repository now includes a minimal end-to-end Phase 1 architecture:
 
 - Julia backend source: `backend/src/StatlibBackend.jl`
 - Backend build scripts: `backend/build/build_backend.jl`, `backend/build/package_backend.sh`
-- R package interface: `statlibR/R/jols_fit_xy.R`
+- R package interface: `statlibR/R/jols_fit_xy.R` for installed package `metricsjl`
 - R-to-backend C bridge: `statlibR/src/jols_bridge.c`
 - R tests: `statlibR/tests/testthat/`
 
@@ -35,4 +35,3 @@ The `phase1-no-julia-runtime` workflow triggers automatically on:
 - any push to any branch
 - any pull request event (`opened`, `synchronize`, `reopened`, `ready_for_review`) to any branch
 - manual runs via **Actions → phase1-no-julia-runtime → Run workflow**
-
