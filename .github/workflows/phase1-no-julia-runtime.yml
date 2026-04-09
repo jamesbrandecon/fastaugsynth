@@ -2,7 +2,7 @@ name: phase1-no-julia-runtime
 
 on:
   push:
-    branches: ["**"]
+    branches: ["main"]
   pull_request:
     branches: ["**"]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -58,7 +58,7 @@ jobs:
       - name: Install R dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          packages: any::curl any::gitcreds any::jsonlite any::testthat
+          packages: any::Formula any::Synth any::curl any::gitcreds any::jsonlite any::testthat
       - name: Download backend artifact
         uses: actions/download-artifact@v4
         with:
