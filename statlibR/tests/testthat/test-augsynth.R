@@ -70,3 +70,48 @@ test_that("covariate residualization reproduces upstream basque benchmark", {
   expect_equal(covsyn$l2_imbalance, 0.3720, tolerance = 1e-3)
   expect_equal(covsyn$covariate_l2_imbalance, 0, tolerance = 1e-3)
 })
+
+test_that("jackknife summary works for single-period SCM and ridge fits", {
+  basque <- basque_panel()
+
+  syn <- augsynth(gdpcap ~ trt, regionno, year, basque, progfunc = "None", scm = TRUE, t_int = 1975)
+  asyn <- augsynth(gdpcap ~ trt, regionno, year, basque, progfunc = "Ridge", scm = TRUE, lambda = 8, t_int = 1975)
+
+  jack_syn <- summary(syn, inf = TRUE, inf_type = "jackknife")
+  jack_asyn <- summary(asyn, inf = TRUE, inf_type = "jackknife")
+
+  expect_s3_class(jack_syn, "summary.augsynth")
+  expect_equal(jack_syn$average_att$Estimate, -0.6915277, tolerance = 1e-4)
+  expect_equal(jack_syn$average_att$Std.Error, 0.05496423, tolerance = 1e-4)
+  expect_equal(jack_syn$att$Estimate[21:25], c(0.1443060, 0.0093784, -0.1216668, -0.2876975, -0.4166083), tolerance = 1e-4)
+  expect_equal(jack_syn$att$Std.Error[21:25], c(0.07854754, 0.06127062, 0.04507349, 0.06290192, 0.04505673), tolerance = 1e-4)
+  expect_match(paste(capture.output(print(jack_syn)), collapse = "\n"), "Average ATT Estimate \\(Jackknife Std\\. Error\\)")
+
+  expect_equal(jack_asyn$average_att$Estimate, -0.6923196, tolerance = 1e-4)
+  expect_equal(jack_asyn$average_att$Std.Error, 0.1429878, tolerance = 1e-4)
+  expect_equal(jack_asyn$att$Estimate[21:25], c(0.1424433, 0.0078239, -0.1230318, -0.2903846, -0.4198612), tolerance = 1e-4)
+  expect_equal(jack_asyn$att$Std.Error[21:25], c(0.03368404, 0.04762395, 0.06166484, 0.08863483, 0.08525669), tolerance = 1e-4)
+})
+
+test_that("conformal summary matches deterministic basque benchmarks", {
+  basque <- basque_panel()
+
+  syn <- augsynth(gdpcap ~ trt, regionno, year, basque, progfunc = "None", scm = TRUE, t_int = 1975)
+  asyn <- augsynth(gdpcap ~ trt, regionno, year, basque, progfunc = "Ridge", scm = TRUE, lambda = 8, t_int = 1975)
+
+  conf_syn <- summary(syn, inf = TRUE, inf_type = "conformal", type = "block", grid_size = 11)
+  conf_asyn <- summary(asyn, inf = TRUE, inf_type = "conformal", type = "block", grid_size = 11)
+
+  expect_equal(conf_syn$average_att$Estimate, -0.6915277, tolerance = 1e-4)
+  expect_equal(conf_syn$average_att$p_val, 0.1860465, tolerance = 1e-6)
+  expect_equal(conf_syn$att$Estimate[21:25], c(0.1443060, 0.0093784, -0.1216668, -0.2876975, -0.4166083), tolerance = 1e-4)
+  expect_equal(conf_syn$att$lower_bound[21:25], c(0, 0, -0.1216668, -0.2876975, -0.4166083), tolerance = 1e-4)
+  expect_equal(conf_syn$att$p_val[21:25], c(0.19047619, 1, 0.23809524, 0.04761905, 0.04761905), tolerance = 1e-6)
+  expect_match(paste(capture.output(print(conf_syn)), collapse = "\n"), "Average ATT Estimate \\(p Value for Joint Null\\)")
+
+  expect_equal(conf_asyn$average_att$Estimate, -0.6923196, tolerance = 1e-4)
+  expect_equal(conf_asyn$average_att$p_val, 0.3023256, tolerance = 1e-6)
+  expect_equal(conf_asyn$att$Estimate[21:25], c(0.1424433, 0.0078239, -0.1230318, -0.2903846, -0.4198612), tolerance = 1e-4)
+  expect_equal(conf_asyn$att$lower_bound[21:25], c(0, 0, -0.1230318, -0.2903846, -0.4198612), tolerance = 1e-4)
+  expect_equal(conf_asyn$att$p_val[21:25], c(0.19047619, 1, 0.28571429, 0.04761905, 0.04761905), tolerance = 1e-6)
+})
