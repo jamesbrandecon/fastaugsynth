@@ -54,3 +54,78 @@ end
     rmse = sqrt(mean((yte - Xte * βridge) .^ 2))
     @test rmse < 1.0
 end
+
+@testset "SCM simplex ABI" begin
+    donors = [
+        1.0 0.0
+        0.0 1.0
+    ]
+    target = [0.25, 0.75]
+    weights = zeros(size(donors, 1))
+    err = zeros(UInt8, 512)
+
+    status = StatlibBackend.fit_synth_weights!(
+        Cint(size(donors, 1)),
+        Cint(size(donors, 2)),
+        pointer(donors),
+        pointer(target),
+        pointer(weights),
+        pointer(err),
+        Cint(length(err))
+    )
+
+    @test status == 0
+    @test maximum(abs.(weights .- [0.25, 0.75])) < 1e-8
+end
+
+@testset "Ridge ASCM ABI" begin
+    Xc = [
+        1.0 2.0 3.0 4.0
+        1.5 2.5 3.5 4.5
+        2.0 3.0 4.0 5.0
+    ]
+    x1 = [1.25, 2.25, 3.25, 4.25]
+    λgrid = [0.01, 0.1, 1.0, 10.0]
+
+    weights = zeros(size(Xc, 1))
+    syn = zeros(size(Xc, 1))
+    bestλ = Ref{Float64}(NaN)
+    errs = zeros(length(λgrid))
+    errs_se = zeros(length(λgrid))
+    err = zeros(UInt8, 512)
+
+    status = StatlibBackend.fit_ridge_augsynth_inner!(
+        Cint(size(Xc, 1)),
+        Cint(size(Xc, 2)),
+        pointer(Xc),
+        pointer(x1),
+        Cint(1),
+        Cint(1),
+        Cint(1),
+        Cint(length(λgrid)),
+        pointer(λgrid),
+        Cint(1),
+        Cint(1),
+        pointer(weights),
+        pointer(syn),
+        Base.unsafe_convert(Ptr{Float64}, bestλ),
+        pointer(errs),
+        pointer(errs_se),
+        pointer(err),
+        Cint(length(err))
+    )
+
+    @test status == 0
+    @test bestλ[] in λgrid
+
+    ref_syn = StatlibBackend._solve_simplex_qp(Xc, x1)
+    ref_errs, ref_errs_se = StatlibBackend._lambda_errors(Xc, x1, λgrid, 1, true)
+    ref_λ = StatlibBackend._choose_lambda(λgrid, ref_errs, ref_errs_se, true)
+    ref_weights = ref_syn .+ StatlibBackend._ridge_adjustment(Xc, x1, ref_syn, ref_λ)
+
+    @test maximum(abs.(syn .- ref_syn)) < 1e-8
+    @test maximum(abs.(errs .- ref_errs)) < 1e-8
+    @test maximum(abs.(errs_se .- ref_errs_se)) < 1e-8
+    @test bestλ[] == ref_λ
+    @test maximum(abs.(weights .- ref_weights)) < 1e-8
+end

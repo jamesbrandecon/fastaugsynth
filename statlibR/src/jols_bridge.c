@@ -17,11 +17,26 @@ typedef int (*fit_ridge_loocv_dense_fn)(int, int,
                                         double*, double*, double*,
                                         char*, int);
 
+typedef int (*fit_synth_weights_fn)(int, int,
+                                    const double*, const double*,
+                                    double*, char*, int);
+
+typedef int (*fit_ridge_augsynth_inner_fn)(int, int,
+                                           const double*, const double*,
+                                           int, int, int,
+                                           int, const double*,
+                                           int, int,
+                                           double*, double*, double*,
+                                           double*, double*,
+                                           char*, int);
+
 typedef void (*init_julia_fn)(int, char**);
 
 static void* backend_handle = NULL;
 static fit_ols_dense_fn fit_ols_dense_ptr = NULL;
 static fit_ridge_loocv_dense_fn fit_ridge_loocv_dense_ptr = NULL;
+static fit_synth_weights_fn fit_synth_weights_ptr = NULL;
+static fit_ridge_augsynth_inner_fn fit_ridge_augsynth_inner_ptr = NULL;
 static init_julia_fn init_julia_ptr = NULL;
 static char backend_libpath[4096] = "";
 
@@ -146,9 +161,113 @@ SEXP C_jridge_fit_xy(SEXP X_, SEXP y_, SEXP lambdas_, SEXP libpath_) {
   return out;
 }
 
+SEXP C_jsynth_weights(SEXP donors_, SEXP target_, SEXP libpath_) {
+  if (!Rf_isMatrix(donors_) || TYPEOF(donors_) != REALSXP) Rf_error("donors must be a numeric matrix");
+  if (TYPEOF(target_) != REALSXP) Rf_error("target must be numeric");
+  if (TYPEOF(libpath_) != STRSXP || Rf_length(libpath_) != 1) Rf_error("libpath must be a scalar string");
+
+  SEXP dim = Rf_getAttrib(donors_, R_DimSymbol);
+  int n0 = INTEGER(dim)[0];
+  int t0 = INTEGER(dim)[1];
+  if (Rf_length(target_) != t0) Rf_error("ncol(donors) must equal length(target)");
+
+  const char* libpath = CHAR(STRING_ELT(libpath_, 0));
+  void* h = load_backend(libpath);
+
+  if (fit_synth_weights_ptr == NULL) {
+    fit_synth_weights_ptr = (fit_synth_weights_fn)dlsym(h, "fit_synth_weights");
+  }
+  if (fit_synth_weights_ptr == NULL) {
+    Rf_error("Symbol fit_synth_weights not found in backend library");
+  }
+
+  SEXP weights = PROTECT(Rf_allocVector(REALSXP, n0));
+  char errbuf[512];
+  memset(errbuf, 0, sizeof(errbuf));
+
+  int status = fit_synth_weights_ptr(
+    n0, t0, REAL(donors_), REAL(target_), REAL(weights), errbuf, 512
+  );
+  if (status != 0) Rf_error("Backend fit_synth_weights failed with status %d: %s", status, errbuf);
+
+  UNPROTECT(1);
+  return weights;
+}
+
+SEXP C_jridge_augsynth_inner(SEXP Xc_, SEXP x1_, SEXP ridge_, SEXP scm_,
+                             SEXP select_lambda_, SEXP lambdas_,
+                             SEXP holdout_length_, SEXP min1se_,
+                             SEXP libpath_) {
+  if (!Rf_isMatrix(Xc_) || TYPEOF(Xc_) != REALSXP) Rf_error("Xc must be a numeric matrix");
+  if (TYPEOF(x1_) != REALSXP) Rf_error("x1 must be numeric");
+  if (TYPEOF(lambdas_) != REALSXP) Rf_error("lambdas must be numeric");
+  if (TYPEOF(libpath_) != STRSXP || Rf_length(libpath_) != 1) Rf_error("libpath must be a scalar string");
+
+  SEXP dim = Rf_getAttrib(Xc_, R_DimSymbol);
+  int n0 = INTEGER(dim)[0];
+  int t0 = INTEGER(dim)[1];
+  int nlambda = Rf_length(lambdas_);
+
+  if (Rf_length(x1_) != t0) Rf_error("ncol(Xc) must equal length(x1)");
+
+  const char* libpath = CHAR(STRING_ELT(libpath_, 0));
+  void* h = load_backend(libpath);
+
+  if (fit_ridge_augsynth_inner_ptr == NULL) {
+    fit_ridge_augsynth_inner_ptr = (fit_ridge_augsynth_inner_fn)dlsym(h, "fit_ridge_augsynth_inner");
+  }
+  if (fit_ridge_augsynth_inner_ptr == NULL) {
+    Rf_error("Symbol fit_ridge_augsynth_inner not found in backend library");
+  }
+
+  SEXP weights = PROTECT(Rf_allocVector(REALSXP, n0));
+  SEXP synw = PROTECT(Rf_allocVector(REALSXP, n0));
+  SEXP lambda = PROTECT(Rf_allocVector(REALSXP, 1));
+  SEXP lambda_errors = PROTECT(Rf_allocVector(REALSXP, nlambda));
+  SEXP lambda_errors_se = PROTECT(Rf_allocVector(REALSXP, nlambda));
+
+  char errbuf[512];
+  memset(errbuf, 0, sizeof(errbuf));
+
+  int status = fit_ridge_augsynth_inner_ptr(
+    n0, t0,
+    REAL(Xc_), REAL(x1_),
+    Rf_asLogical(ridge_),
+    Rf_asLogical(scm_),
+    Rf_asLogical(select_lambda_),
+    nlambda, REAL(lambdas_),
+    Rf_asInteger(holdout_length_),
+    Rf_asLogical(min1se_),
+    REAL(weights), REAL(synw), REAL(lambda),
+    REAL(lambda_errors), REAL(lambda_errors_se),
+    errbuf, 512
+  );
+  if (status != 0) Rf_error("Backend fit_ridge_augsynth_inner failed with status %d: %s", status, errbuf);
+
+  SEXP out = PROTECT(Rf_allocVector(VECSXP, 5));
+  SET_VECTOR_ELT(out, 0, weights);
+  SET_VECTOR_ELT(out, 1, synw);
+  SET_VECTOR_ELT(out, 2, lambda);
+  SET_VECTOR_ELT(out, 3, lambda_errors);
+  SET_VECTOR_ELT(out, 4, lambda_errors_se);
+
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, 5));
+  SET_STRING_ELT(names, 0, Rf_mkChar("weights"));
+  SET_STRING_ELT(names, 1, Rf_mkChar("synw"));
+  SET_STRING_ELT(names, 2, Rf_mkChar("lambda"));
+  SET_STRING_ELT(names, 3, Rf_mkChar("lambda_errors"));
+  SET_STRING_ELT(names, 4, Rf_mkChar("lambda_errors_se"));
+  Rf_setAttrib(out, R_NamesSymbol, names);
+
+  UNPROTECT(7);
+  return out;
+}
+
 static const R_CallMethodDef CallEntries[] = {
   {"C_jols_fit_xy", (DL_FUNC)&C_jols_fit_xy, 3},
   {"C_jridge_fit_xy", (DL_FUNC)&C_jridge_fit_xy, 4},
+  {"C_jsynth_weights", (DL_FUNC)&C_jsynth_weights, 3},
+  {"C_jridge_augsynth_inner", (DL_FUNC)&C_jridge_augsynth_inner, 9},
   {NULL, NULL, 0}
 };
 

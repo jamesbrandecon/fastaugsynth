@@ -3,3 +3,4 @@
 /backend/build/dist/
 /statlibR/src/*.o
 /statlibR/src/*.so
+/tmp/augsynth-upstream/
