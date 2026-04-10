@@ -3,11 +3,66 @@ module StatlibBackend
 using LinearAlgebra
 using Statistics
 using Random
+using Base.Threads
 
 const ERR_OK = 0
 const ERR_BAD_INPUT = 1
 const ERR_LINALG = 2
 const ERR_EXCEPTION = 3
+
+@inline function _fill_omit_pre_col!(outX::AbstractMatrix{Float64},
+                                    outY::AbstractMatrix{Float64},
+                                    X::AbstractMatrix{Float64},
+                                    y::AbstractMatrix{Float64},
+                                    omit_idx::Int)
+    n, t0 = size(X)
+    tpost = size(y, 2)
+    col_out = 1
+    @inbounds for col in 1:t0
+        if col == omit_idx
+            continue
+        end
+        outX[:, col_out] .= @view X[:, col]
+        col_out += 1
+    end
+    @views outY[:, 1] .= X[:, omit_idx]
+    for col in 1:tpost
+        @views outY[:, col + 1] .= y[:, col]
+    end
+    return
+end
+
+@inline function _fill_omit_row!(outX::AbstractMatrix{Float64},
+                                outY::AbstractMatrix{Float64},
+                                outTrt::AbstractVector{Float64},
+                                X::AbstractMatrix{Float64},
+                                y::AbstractMatrix{Float64},
+                                trt::AbstractVector{Float64},
+                                omit_row::Int)
+    n = size(X, 1)
+    out_row = 1
+    @inbounds for row in 1:n
+        if row == omit_row
+            continue
+        end
+        outX[out_row, :] .= @view X[row, :]
+        outY[out_row, :] .= @view y[row, :]
+        outTrt[out_row] = trt[row]
+        out_row += 1
+    end
+    return
+end
+
+@inline function _view_post_slice!(out::AbstractVector{Float64},
+                                  data::AbstractVector{Float64},
+                                  t0::Int,
+                                  tpost::Int)
+    start = t0 + 1
+    @inbounds for i in 1:length(out)
+        out[i] = data[start + i - 1]
+    end
+    return
+end
 
 function fit_ols_dense!(n::Int32, p::Int32, Xptr::Ptr{Cdouble}, yptr::Ptr{Cdouble},
                         coefptr::Ptr{Cdouble}, sigma2ptr::Ptr{Cdouble},
@@ -397,11 +452,11 @@ function _fit_augsynth_single!(X::AbstractMatrix{Float64}, y::AbstractMatrix{Flo
     end
 
     Xc = copy(X)
-    yc = copy(y)
     if fixedeff
-        means = vec(mean(hcat(Xc, yc); dims = 2))
+        means = vec(sum(Xc; dims = 2))
+        means .+= vec(sum(y; dims = 2))
+        means ./= size(Xc, 2) + size(y, 2)
         Xc .-= means
-        yc .-= means
     end
 
     control_means = vec(mean(Xc[control, :], dims = 1))
@@ -442,14 +497,16 @@ function _fit_augsynth_single!(X::AbstractMatrix{Float64}, y::AbstractMatrix{Flo
     unif_l2 = sqrt(sum((transpose(X0) * unif_w .- X1) .^ 2))
     scaled_l2 = iszero(unif_l2) ? NaN : l2_imbalance / unif_l2
 
-    base_series = weights' * (hcat(Xc, y)[control, :])
-    mhat = repeat(base_series, size(X, 1), 1)
+    base_series = vcat(
+        vec(weights' * Xc[control, :]),
+        vec(weights' * y[control, :])
+    )
 
     return (
         weights = reshape(weights, :, 1),
         syn = reshape(syn, :, 1),
         lambda = λ,
-        mhat = mhat,
+        mhat = base_series,
         l2_imbalance = l2_imbalance,
         scaled_l2_imbalance = scaled_l2,
         t0 = size(X, 2),
@@ -464,20 +521,98 @@ function _predict_counterfactual(X::AbstractMatrix{Float64}, y::AbstractMatrix{F
         error("fit must include pre- and post-treatment periods")
     end
 
-    comb = hcat(X, y)
     treated = trt .> 0.5
     control = .!treated
-    m1 = vec(mean(fit.mhat[treated, :], dims = 1))
-    resid = comb[control, :] .- fit.mhat[control, :]
-    return vec(m1 .+ vec(transpose(resid) * fit.weights))
+    t0 = fit.t0
+    compact = fit.mhat isa AbstractVector{Float64}
+    ncontrol = count(control)
+    ntreated = count(treated)
+    nrows = length(trt)
+    tpre = t0
+    tpost = fit.tpost
+    if ncontrol == 0 || ntreated == 0
+        error("No control units available for prediction")
+    end
+
+    if compact
+        m1 = fit.mhat
+    else
+        m1 = similar(fit.mhat[1, :])
+        @inbounds for j in 1:(tpre + tpost)
+            acc = 0.0
+            for row in 1:nrows
+                if treated[row]
+                    acc += fit.mhat[row, j]
+                end
+            end
+            m1[j] = acc / ntreated
+        end
+    end
+    resid_pre = Vector{Float64}(undef, tpre)
+    resid_post = Vector{Float64}(undef, tpost)
+    w = fit.weights
+    if compact
+        pre_series = fit.mhat[1:tpre]
+        post_series = fit.mhat[(tpre + 1):end]
+        @inbounds for j in 1:tpre
+            acc = 0.0
+            k = 1
+            for row in 1:nrows
+                if control[row]
+                    acc += w[k] * (X[row, j] - pre_series[j])
+                    k += 1
+                end
+            end
+            resid_pre[j] = acc
+        end
+        @inbounds for j in 1:tpost
+            acc = 0.0
+            k = 1
+            for row in 1:nrows
+                if control[row]
+                    acc += w[k] * (y[row, j] - post_series[j])
+                    k += 1
+                end
+            end
+            resid_post[j] = acc
+        end
+    else
+        @inbounds for j in 1:tpre
+            acc = 0.0
+            k = 1
+            for row in 1:nrows
+                if control[row]
+                    acc += w[k] * (X[row, j] - fit.mhat[row, j])
+                    k += 1
+                end
+            end
+            resid_pre[j] = acc
+        end
+        @inbounds for j in 1:tpost
+            acc = 0.0
+            k = 1
+            for row in 1:nrows
+                if control[row]
+                    acc += w[k] * (y[row, j] - fit.mhat[row, tpre + j])
+                    k += 1
+                end
+            end
+            resid_post[j] = acc
+        end
+    end
+    resid = vcat(vec(resid_pre), vec(resid_post))
+    return vec(m1 .+ resid)
 end
 
 function _predict_att(X::AbstractMatrix{Float64}, y::AbstractMatrix{Float64},
                      trt::AbstractVector{Float64}, fit::NamedTuple)
-    comb = hcat(X, y)
     treated = trt .> 0.5
     y0 = vec(_predict_counterfactual(X, y, trt, fit))
-    att = vec(mean(comb[treated, :], dims = 1) .- y0')
+    treated_obs = vcat(
+        vec(mean(X[treated, :], dims = 1)),
+        vec(mean(y[treated, :], dims = 1))
+    )
+    att = treated_obs .- y0
     att
 end
 
@@ -529,31 +664,61 @@ function _jackknife_plus_row!(X::AbstractMatrix{Float64}, y::AbstractMatrix{Floa
 
     jack_ests = Array{Float64}(undef, 4, tpost + 1, t0)
     held_out = zeros(t0)
+    subXbuf = Matrix{Float64}(undef, n, t0 - 1)
+    subYbuf = Matrix{Float64}(undef, n, tpost + 1)
 
-    for i in 1:t0
-        keep_cols = trues(t0)
-        keep_cols[i] = false
-        subX = X[:, keep_cols]
-        suby = hcat(X[:, i], y)
+    if Threads.nthreads() > 1 && t0 > 8
+        nthreads = Threads.nthreads()
+        x_pool = [Matrix{Float64}(undef, n, t0 - 1) for _ in 1:nthreads]
+        y_pool = [Matrix{Float64}(undef, n, tpost + 1) for _ in 1:nthreads]
+        Threads.@threads for i in 1:t0
+            tid = threadid()
+            subX = x_pool[tid]
+            suby = y_pool[tid]
+            _fill_omit_pre_col!(subX, suby, X, y, i)
 
-        sub = _fit_augsynth_single!(
-            subX, suby, trt;
-            ridge = ridge, scm = scm, lambda = lambda,
-            holdout_length = holdout_length, min1se = min1se,
-            V = V, fixedeff = fixedeff
-        )
-        counter = _predict_counterfactual(subX, suby, trt, sub)
+            sub = _fit_augsynth_single!(
+                subX, suby, trt;
+                ridge = ridge, scm = scm, lambda = lambda,
+                holdout_length = holdout_length, min1se = min1se,
+                V = V, fixedeff = fixedeff
+            )
+            counter = _predict_counterfactual(subX, suby, trt, sub)
 
-        est = counter[(t0 + 1):end]
-        est_mean = mean(est)
-        est = vcat(est, est_mean)
+            est = view(counter, (t0 + 1):length(counter))
+            est_mean = mean(est)
+            est = vcat(est, est_mean)
 
-        held = mean(X[trt .> 0.5, i]) - counter[t0]
-        held_out[i] = held
-        jack_ests[1, :, i] .= est .+ abs(held)
-        jack_ests[2, :, i] .= est .- abs(held)
-        jack_ests[3, :, i] .= est .+ held
-        jack_ests[4, :, i] .= est
+            held = mean(X[trt .> 0.5, i]) - counter[t0]
+            held_out[i] = held
+            jack_ests[1, :, i] .= est .+ abs(held)
+            jack_ests[2, :, i] .= est .- abs(held)
+            jack_ests[3, :, i] .= est .+ held
+            jack_ests[4, :, i] .= est
+        end
+    else
+        for i in 1:t0
+            _fill_omit_pre_col!(subXbuf, subYbuf, X, y, i)
+
+            sub = _fit_augsynth_single!(
+                subXbuf, subYbuf, trt;
+                ridge = ridge, scm = scm, lambda = lambda,
+                holdout_length = holdout_length, min1se = min1se,
+                V = V, fixedeff = fixedeff
+            )
+            counter = _predict_counterfactual(subXbuf, subYbuf, trt, sub)
+
+            est = view(counter, (t0 + 1):length(counter))
+            est_mean = mean(est)
+            est = vcat(est, est_mean)
+
+            held = mean(X[trt .> 0.5, i]) - counter[t0]
+            held_out[i] = held
+            jack_ests[1, :, i] .= est .+ abs(held)
+            jack_ests[2, :, i] .= est .- abs(held)
+            jack_ests[3, :, i] .= est .+ held
+            jack_ests[4, :, i] .= est
+        end
     end
 
     if conservative
@@ -619,18 +784,48 @@ function _jackknife_unit_std!(X::AbstractMatrix{Float64}, y::AbstractMatrix{Floa
     end
 
     all_ests = Matrix{Float64}(undef, tpost + 1, length(sel))
-    for (k, i) in pairs(sel)
-        keep = trues(n)
-        keep[i] = false
-        sub = _fit_augsynth_single!(
-            X[keep, :], y[keep, :], trt[keep];
-            ridge = ridge, scm = scm, lambda = lambda,
-            holdout_length = holdout_length, min1se = min1se,
-            V = V, fixedeff = fixedeff
-        )
-        att_sub = _predict_att(X[keep, :], y[keep, :], trt[keep], sub)
-        est = att_sub[(t0 + 1):end]
-        all_ests[:, k] .= vcat(est, mean(est))
+    if Threads.nthreads() > 1 && length(sel) > 8
+        nthreads = Threads.nthreads()
+        x_pool = [Matrix{Float64}(undef, n, t0) for _ in 1:nthreads]
+        y_pool = [Matrix{Float64}(undef, n, tpost) for _ in 1:nthreads]
+        trt_pool = [Vector{Float64}(undef, n) for _ in 1:nthreads]
+        Threads.@threads for idx in eachindex(sel)
+            i = sel[idx]
+            subX = x_pool[threadid()]
+            subY = y_pool[threadid()]
+            subTrt = trt_pool[threadid()]
+            _fill_omit_row!(subX, subY, subTrt, X, y, trt, i)
+            sub = _fit_augsynth_single!(
+                subX[1:(n - 1), :], subY[1:(n - 1), :], subTrt[1:(n - 1)];
+                ridge = ridge, scm = scm, lambda = lambda,
+                holdout_length = holdout_length, min1se = min1se,
+                V = V, fixedeff = fixedeff
+            )
+            att_sub = _predict_att(
+                subX[1:(n - 1), :],
+                subY[1:(n - 1), :],
+                subTrt[1:(n - 1)],
+                sub
+            )
+            est = att_sub[(t0 + 1):end]
+            all_ests[:, idx] .= vcat(est, mean(est))
+        end
+    else
+        subX = Matrix{Float64}(undef, n - 1, t0)
+        subY = Matrix{Float64}(undef, n - 1, tpost)
+        subTrt = Vector{Float64}(undef, n - 1)
+        for (k, i) in pairs(sel)
+            _fill_omit_row!(subX, subY, subTrt, X, y, trt, i)
+            sub = _fit_augsynth_single!(
+                subX, subY, subTrt;
+                ridge = ridge, scm = scm, lambda = lambda,
+                holdout_length = holdout_length, min1se = min1se,
+                V = V, fixedeff = fixedeff
+            )
+            att_sub = _predict_att(subX, subY, subTrt, sub)
+            est = att_sub[(t0 + 1):end]
+            all_ests[:, k] .= vcat(est, mean(est))
+        end
     end
 
     avg = vec(mean(all_ests; dims = 2))
@@ -679,16 +874,41 @@ function _compute_permute_test_stats(X::AbstractMatrix{Float64}, y::AbstractMatr
 
     if type == 0
         out = zeros(ns)
-        for i in 1:ns
-            reorder = shuffle!(copy(obs))
-            out[i] = _jackknife_permute_stat(reorder[(t0 + 1):tpost], q)
+        nthreads = Threads.nthreads()
+        if nthreads > 1 && ns > 16
+            reorder_pool = [similar(obs) for _ in 1:nthreads]
+            obs_post_pool = [Vector{Float64}(undef, tpost - t0) for _ in 1:nthreads]
+            rng_pool = [Random.Xoshiro(0x3d4f1d2f + tid) for tid in 1:nthreads]
+            Threads.@threads for i in 1:ns
+                tid = threadid()
+                reorder = reorder_pool[tid]
+                obs_post = obs_post_pool[tid]
+                rng = rng_pool[tid]
+                copyto!(reorder, obs)
+                shuffle!(rng, reorder)
+                _view_post_slice!(obs_post, reorder, t0, tpost)
+                out[i] = _jackknife_permute_stat(obs_post, q)
+            end
+        else
+            reorder = similar(obs)
+            obs_post = Vector{Float64}(undef, tpost - t0)
+            for i in 1:ns
+                copyto!(reorder, obs)
+                shuffle!(reorder)
+                _view_post_slice!(obs_post, reorder, t0, tpost)
+                out[i] = _jackknife_permute_stat(obs_post, q)
+            end
         end
     else
         out = zeros(tpost)
-        idx = collect(1:tpost)
+        obs_shift = Vector{Float64}(undef, tpost)
+        obs_post = Vector{Float64}(undef, tpost - t0)
         for i in 1:tpost
-            reorder = obs[mod1.(idx .+ (i - 1), tpost)]
-            out[i] = _jackknife_permute_stat(reorder[(t0 + 1):tpost], q)
+            for j in 1:tpost
+                obs_shift[j] = obs[mod1(j + i - 1, tpost)]
+            end
+            _view_post_slice!(obs_post, obs_shift, t0, tpost)
+            out[i] = _jackknife_permute_stat(obs_post, q)
         end
     end
 
@@ -786,14 +1006,21 @@ function _conformal!(X::AbstractMatrix{Float64}, y::AbstractMatrix{Float64},
     post_sd = sqrt(mean(base_att[(t0 + 1):end] .^ 2))
 
     ci = zeros(Float64, 3, tpost)
+    Xj = Matrix{Float64}(undef, n, t0 + 1)
+    yj = Matrix{Float64}(undef, n, max(1, tpost - 1))
+    base_pred = _predict_counterfactual(X, y, trt, base)
     for j in 1:tpost
-        Xj = hcat(X, y[:, j:j])
+        Xj[:, 1:t0] .= X
+        Xj[:, t0 + 1] .= y[:, j]
         if tpost > 1
-            keep = trues(tpost)
-            keep[j] = false
-            yj = y[:, keep]
+            if j > 1
+                yj[:, 1:(j - 1)] .= y[:, 1:(j - 1)]
+            end
+            if j < tpost
+                yj[:, j:(tpost - 1)] .= y[:, (j + 1):tpost]
+            end
         else
-            yj = ones(n, 1)
+            fill!(yj, 1.0)
         end
         grid = collect(
             range(base_att[t0 + j] - 2 * post_sd, stop = base_att[t0 + j] + 2 * post_sd, length = grid_size)
@@ -826,7 +1053,7 @@ function _conformal!(X::AbstractMatrix{Float64}, y::AbstractMatrix{Float64},
     )
 
     att = vcat(base_att, mean(base_att[(t0 + 1):t_total]))
-    y1 = vcat(_predict_counterfactual(X, y, trt, base), mean(_predict_counterfactual(X, y, trt, base)[(t0 + 1):end]))
+    y1 = vcat(base_pred, mean(base_pred[(t0 + 1):end]))
 
   lb_tail = isempty(ci[1, :]) ? fill(NaN, 1) : [minimum(filter(isfinite, ci[1, :]))]
   ub_tail = isempty(ci[2, :]) ? fill(NaN, 1) : [maximum(filter(isfinite, ci[2, :]))]
