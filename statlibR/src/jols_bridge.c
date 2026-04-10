@@ -30,6 +30,25 @@ typedef int (*fit_ridge_augsynth_inner_fn)(int, int,
                                            double*, double*,
                                            char*, int);
 
+typedef int (*jackknife_plus_fn)(int, int, int,
+                                const double*, const double*, const double*,
+                                double*, double*, double*, double*,
+                                double, int, int, int, const double*,
+                                int, int, char*, int);
+
+typedef int (*jackknife_unit_std_fn)(int, int, int,
+                                    const double*, const double*, const double*,
+                                    double*, double*,
+                                    int, int, const double*,
+                                    int, int, char*, int);
+
+typedef int (*conformal_inference_fn)(int, int, int,
+                                      const double*, const double*, const double*,
+                                      double*, double*, double*, double*,
+                                      double, int, double, int, int,
+                                      int, int, const double*,
+                                      int, int, char*, int);
+
 typedef void (*init_julia_fn)(int, char**);
 
 static void* backend_handle = NULL;
@@ -37,6 +56,9 @@ static fit_ols_dense_fn fit_ols_dense_ptr = NULL;
 static fit_ridge_loocv_dense_fn fit_ridge_loocv_dense_ptr = NULL;
 static fit_synth_weights_fn fit_synth_weights_ptr = NULL;
 static fit_ridge_augsynth_inner_fn fit_ridge_augsynth_inner_ptr = NULL;
+static jackknife_plus_fn jackknife_plus_ptr = NULL;
+static jackknife_unit_std_fn jackknife_unit_std_ptr = NULL;
+static conformal_inference_fn conformal_inference_ptr = NULL;
 static init_julia_fn init_julia_ptr = NULL;
 static char backend_libpath[4096] = "";
 
@@ -263,11 +285,226 @@ SEXP C_jridge_augsynth_inner(SEXP Xc_, SEXP x1_, SEXP ridge_, SEXP scm_,
   return out;
 }
 
+SEXP C_jackknife_plus(SEXP X_, SEXP y_, SEXP trt_, SEXP ridge_,
+                      SEXP scm_, SEXP lambda_, SEXP alpha_, SEXP conservative_,
+                      SEXP holdout_length_, SEXP min1se_, SEXP libpath_) {
+  if (!Rf_isMatrix(X_) || TYPEOF(X_) != REALSXP) Rf_error("X must be a numeric matrix");
+  if (!Rf_isMatrix(y_) || TYPEOF(y_) != REALSXP) Rf_error("y must be a numeric matrix");
+  if (TYPEOF(trt_) != REALSXP) Rf_error("trt must be numeric");
+  if (TYPEOF(lambda_) != REALSXP) Rf_error("lambda must be numeric");
+  if (Rf_length(lambda_) != 1) Rf_error("lambda must be length 1");
+  if (TYPEOF(libpath_) != STRSXP || Rf_length(libpath_) != 1) Rf_error("libpath must be a scalar string");
+
+  SEXP xdim = Rf_getAttrib(X_, R_DimSymbol);
+  int n = INTEGER(xdim)[0];
+  int t0 = INTEGER(xdim)[1];
+  SEXP ydim = Rf_getAttrib(y_, R_DimSymbol);
+  int tpost = INTEGER(ydim)[1];
+  if (INTEGER(ydim)[0] != n) Rf_error("nrow(y) must equal nrow(X)");
+  if (Rf_length(trt_) != n) Rf_error("length(trt) must equal nrow(X)");
+
+  const char* libpath = CHAR(STRING_ELT(libpath_, 0));
+  void* h = load_backend(libpath);
+
+  if (jackknife_plus_ptr == NULL) {
+    jackknife_plus_ptr = (jackknife_plus_fn)dlsym(h, "jackknife_plus");
+  }
+  if (jackknife_plus_ptr == NULL) {
+    Rf_error("Symbol jackknife_plus not found in backend library");
+  }
+
+  int total = n + tpost + 1;
+  SEXP att = PROTECT(Rf_allocVector(REALSXP, total));
+  SEXP lb = PROTECT(Rf_allocVector(REALSXP, total));
+  SEXP ub = PROTECT(Rf_allocVector(REALSXP, total));
+  SEXP heldout_att = PROTECT(Rf_allocVector(REALSXP, total));
+  char errbuf[512];
+  memset(errbuf, 0, sizeof(errbuf));
+
+  int status = jackknife_plus_ptr(
+    n, t0, tpost,
+    REAL(X_), REAL(y_), REAL(trt_),
+    REAL(att), REAL(lb), REAL(ub), REAL(heldout_att),
+    Rf_asReal(alpha_), Rf_asLogical(conservative_),
+    Rf_asLogical(ridge_), Rf_asLogical(scm_),
+    REAL(lambda_),
+    Rf_asInteger(holdout_length_),
+    Rf_asLogical(min1se_),
+    errbuf, 512
+  );
+  if (status != 0) Rf_error("Backend jackknife_plus failed with status %d: %s", status, errbuf);
+
+  SEXP out = PROTECT(Rf_allocVector(VECSXP, 4));
+  SET_VECTOR_ELT(out, 0, att);
+  SET_VECTOR_ELT(out, 1, lb);
+  SET_VECTOR_ELT(out, 2, ub);
+  SET_VECTOR_ELT(out, 3, heldout_att);
+
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, 4));
+  SET_STRING_ELT(names, 0, Rf_mkChar("att"));
+  SET_STRING_ELT(names, 1, Rf_mkChar("lb"));
+  SET_STRING_ELT(names, 2, Rf_mkChar("ub"));
+  SET_STRING_ELT(names, 3, Rf_mkChar("heldout_att"));
+  Rf_setAttrib(out, R_NamesSymbol, names);
+
+  UNPROTECT(6);
+  return out;
+}
+
+SEXP C_jackknife_unit_std(SEXP X_, SEXP y_, SEXP trt_, SEXP ridge_,
+                          SEXP scm_, SEXP lambda_, SEXP holdout_length_, SEXP min1se_, SEXP libpath_) {
+  if (!Rf_isMatrix(X_) || TYPEOF(X_) != REALSXP) Rf_error("X must be a numeric matrix");
+  if (!Rf_isMatrix(y_) || TYPEOF(y_) != REALSXP) Rf_error("y must be a numeric matrix");
+  if (TYPEOF(trt_) != REALSXP) Rf_error("trt must be numeric");
+  if (TYPEOF(lambda_) != REALSXP) Rf_error("lambda must be numeric");
+  if (Rf_length(lambda_) != 1) Rf_error("lambda must be length 1");
+  if (TYPEOF(libpath_) != STRSXP || Rf_length(libpath_) != 1) Rf_error("libpath must be a scalar string");
+
+  SEXP xdim = Rf_getAttrib(X_, R_DimSymbol);
+  int n = INTEGER(xdim)[0];
+  int t0 = INTEGER(xdim)[1];
+  SEXP ydim = Rf_getAttrib(y_, R_DimSymbol);
+  int tpost = INTEGER(ydim)[1];
+  if (INTEGER(ydim)[0] != n) Rf_error("nrow(y) must equal nrow(X)");
+  if (Rf_length(trt_) != n) Rf_error("length(trt) must equal nrow(X)");
+
+  const char* libpath = CHAR(STRING_ELT(libpath_, 0));
+  void* h = load_backend(libpath);
+
+  if (jackknife_unit_std_ptr == NULL) {
+    jackknife_unit_std_ptr = (jackknife_unit_std_fn)dlsym(h, "jackknife_unit_std");
+  }
+  if (jackknife_unit_std_ptr == NULL) {
+    Rf_error("Symbol jackknife_unit_std not found in backend library");
+  }
+
+  int total = n + tpost + 1;
+  SEXP att = PROTECT(Rf_allocVector(REALSXP, total));
+  SEXP se = PROTECT(Rf_allocVector(REALSXP, total));
+  char errbuf[512];
+  memset(errbuf, 0, sizeof(errbuf));
+
+  int status = jackknife_unit_std_ptr(
+    n, t0, tpost,
+    REAL(X_), REAL(y_), REAL(trt_),
+    REAL(att), REAL(se),
+    Rf_asLogical(ridge_), Rf_asLogical(scm_),
+    REAL(lambda_),
+    Rf_asInteger(holdout_length_),
+    Rf_asLogical(min1se_),
+    errbuf, 512
+  );
+  if (status != 0) Rf_error("Backend jackknife_unit_std failed with status %d: %s", status, errbuf);
+
+  SEXP out = PROTECT(Rf_allocVector(VECSXP, 2));
+  SET_VECTOR_ELT(out, 0, att);
+  SET_VECTOR_ELT(out, 1, se);
+
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, 2));
+  SET_STRING_ELT(names, 0, Rf_mkChar("att"));
+  SET_STRING_ELT(names, 1, Rf_mkChar("se"));
+  Rf_setAttrib(out, R_NamesSymbol, names);
+
+  UNPROTECT(4);
+  return out;
+}
+
+SEXP C_conformal_inference(SEXP X_, SEXP y_, SEXP trt_, SEXP ridge_,
+                           SEXP scm_, SEXP lambda_, SEXP alpha_, SEXP type_,
+                           SEXP q_, SEXP ns_, SEXP grid_size_, SEXP holdout_length_,
+                           SEXP min1se_, SEXP libpath_) {
+  if (!Rf_isMatrix(X_) || TYPEOF(X_) != REALSXP) Rf_error("X must be a numeric matrix");
+  if (!Rf_isMatrix(y_) || TYPEOF(y_) != REALSXP) Rf_error("y must be a numeric matrix");
+  if (TYPEOF(trt_) != REALSXP) Rf_error("trt must be numeric");
+  if (TYPEOF(lambda_) != REALSXP) Rf_error("lambda must be numeric");
+  if (Rf_length(lambda_) != 1) Rf_error("lambda must be length 1");
+  if (TYPEOF(alpha_) != REALSXP) Rf_error("alpha must be numeric");
+  if (TYPEOF(q_) != REALSXP) Rf_error("q must be numeric");
+  if (TYPEOF(ns_) != INTSXP && TYPEOF(ns_) != REALSXP) Rf_error("ns must be integer");
+  if (TYPEOF(grid_size_) != INTSXP && TYPEOF(grid_size_) != REALSXP) Rf_error("grid_size must be integer");
+  if (TYPEOF(libpath_) != STRSXP || Rf_length(libpath_) != 1) Rf_error("libpath must be a scalar string");
+
+  SEXP xdim = Rf_getAttrib(X_, R_DimSymbol);
+  int n = INTEGER(xdim)[0];
+  int t0 = INTEGER(xdim)[1];
+  SEXP ydim = Rf_getAttrib(y_, R_DimSymbol);
+  int tpost = INTEGER(ydim)[1];
+  if (INTEGER(ydim)[0] != n) Rf_error("nrow(y) must equal nrow(X)");
+  if (Rf_length(trt_) != n) Rf_error("length(trt) must equal nrow(X)");
+
+  int type = 1;
+  if (TYPEOF(type_) == STRSXP && Rf_length(type_) == 1) {
+    const char* type_str = CHAR(STRING_ELT(type_, 0));
+    type = (strcmp(type_str, "iid") == 0) ? 0 : 1;
+  } else if (TYPEOF(type_) == INTSXP) {
+    type = Rf_asInteger(type_);
+  } else if (TYPEOF(type_) == REALSXP) {
+    type = (int)Rf_asReal(type_);
+  } else {
+    Rf_error("type must be a string or integer");
+  }
+
+  const char* libpath = CHAR(STRING_ELT(libpath_, 0));
+  void* h = load_backend(libpath);
+
+  if (conformal_inference_ptr == NULL) {
+    conformal_inference_ptr = (conformal_inference_fn)dlsym(h, "conformal_inference");
+  }
+  if (conformal_inference_ptr == NULL) {
+    Rf_error("Symbol conformal_inference not found in backend library");
+  }
+
+  int total = n + tpost + 1;
+  SEXP att = PROTECT(Rf_allocVector(REALSXP, total));
+  SEXP lb = PROTECT(Rf_allocVector(REALSXP, total));
+  SEXP ub = PROTECT(Rf_allocVector(REALSXP, total));
+  SEXP pval = PROTECT(Rf_allocVector(REALSXP, total));
+  char errbuf[512];
+  memset(errbuf, 0, sizeof(errbuf));
+
+  int status = conformal_inference_ptr(
+    n, t0, tpost,
+    REAL(X_), REAL(y_), REAL(trt_),
+    REAL(att), REAL(lb), REAL(ub), REAL(pval),
+    Rf_asReal(alpha_), type, Rf_asReal(q_), Rf_asInteger(ns_), Rf_asInteger(grid_size_),
+    Rf_asLogical(ridge_), Rf_asLogical(scm_),
+    REAL(lambda_),
+    Rf_asInteger(holdout_length_),
+    Rf_asLogical(min1se_),
+    errbuf, 512
+  );
+  if (status != 0) Rf_error("Backend conformal_inference failed with status %d: %s", status, errbuf);
+
+  SEXP out = PROTECT(Rf_allocVector(VECSXP, 5));
+  SET_VECTOR_ELT(out, 0, att);
+  SET_VECTOR_ELT(out, 1, lb);
+  SET_VECTOR_ELT(out, 2, ub);
+  SET_VECTOR_ELT(out, 3, pval);
+
+  SEXP alpha_out = PROTECT(Rf_allocVector(REALSXP, 1));
+  REAL(alpha_out)[0] = Rf_asReal(alpha_);
+  SET_VECTOR_ELT(out, 4, alpha_out);
+
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, 5));
+  SET_STRING_ELT(names, 0, Rf_mkChar("att"));
+  SET_STRING_ELT(names, 1, Rf_mkChar("lb"));
+  SET_STRING_ELT(names, 2, Rf_mkChar("ub"));
+  SET_STRING_ELT(names, 3, Rf_mkChar("p_val"));
+  SET_STRING_ELT(names, 4, Rf_mkChar("alpha"));
+  Rf_setAttrib(out, R_NamesSymbol, names);
+
+  UNPROTECT(7);
+  return out;
+}
+
 static const R_CallMethodDef CallEntries[] = {
   {"C_jols_fit_xy", (DL_FUNC)&C_jols_fit_xy, 3},
   {"C_jridge_fit_xy", (DL_FUNC)&C_jridge_fit_xy, 4},
   {"C_jsynth_weights", (DL_FUNC)&C_jsynth_weights, 3},
   {"C_jridge_augsynth_inner", (DL_FUNC)&C_jridge_augsynth_inner, 9},
+  {"C_jackknife_plus", (DL_FUNC)&C_jackknife_plus, 11},
+  {"C_jackknife_unit_std", (DL_FUNC)&C_jackknife_unit_std, 9},
+  {"C_conformal_inference", (DL_FUNC)&C_conformal_inference, 13},
   {NULL, NULL, 0}
 };
 

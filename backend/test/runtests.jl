@@ -129,3 +129,79 @@ end
     @test bestλ[] == ref_λ
     @test maximum(abs.(weights .- ref_weights)) < 1e-8
 end
+
+@testset "Augsynth inference ABI" begin
+    n = 40
+    t0 = 12
+    tpost = 6
+    X = randn(n, t0)
+    β = randn(t0)
+    y = randn(n, tpost)
+    trt = zeros(Float64, n)
+    trt[1:20] .= 1.0
+
+    # Give nontrivial post dynamics to avoid degenerate fits.
+    y .+= X * β .+ reshape(collect(1:tpost), 1, tpost) .* trt
+    total = t0 + tpost + 1
+
+    err = zeros(UInt8, 512)
+    att = zeros(Float64, total)
+    lb = zeros(Float64, total)
+    ub = zeros(Float64, total)
+    heldout = zeros(Float64, total)
+
+    status = StatlibBackend.jackknife_plus!(
+        Cint(n), Cint(t0), Cint(tpost),
+        pointer(X), pointer(y), pointer(trt),
+        pointer(att), pointer(lb), pointer(ub), pointer(heldout),
+        0.1, Cint(0), Cint(0), Cint(0),
+        pointer([0.0]), Cint(1), Cint(1), pointer(err), Cint(length(err))
+    )
+
+    @test status == 0
+    @test length(att) == total
+    @test length(lb) == total
+    @test length(ub) == total
+    @test length(heldout) == total
+    @test all(isfinite, att[t0 + 1:end])
+    @test all(isfinite, lb[t0 + 1:end])
+    @test all(isfinite, ub[t0 + 1:end])
+    @test all(isfinite, heldout)
+
+    att_jack = zeros(Float64, total)
+    se_jack = zeros(Float64, total)
+    fill!(err, 0)
+
+    status = StatlibBackend.jackknife_unit_std!(
+        Cint(n), Cint(t0), Cint(tpost),
+        pointer(X), pointer(y), pointer(trt),
+        pointer(att_jack), pointer(se_jack),
+        Cint(0), Cint(0), pointer([0.0]),
+        Cint(1), Cint(1), pointer(err), Cint(length(err))
+    )
+
+    @test status == 0
+    @test all(isfinite, se_jack[t0 + 1:end])
+    @test all(se_jack[1:t0] .!= 0.0)
+
+    att_conf = zeros(Float64, total)
+    lb_conf = zeros(Float64, total)
+    ub_conf = zeros(Float64, total)
+    pval_conf = zeros(Float64, total)
+    fill!(err, 0)
+
+    status = StatlibBackend.conformal_inference!(
+        Cint(n), Cint(t0), Cint(tpost),
+        pointer(X), pointer(y), pointer(trt),
+        pointer(att_conf), pointer(lb_conf), pointer(ub_conf), pointer(pval_conf),
+        0.1, Cint(0), 1.0, Cint(40), Cint(25),
+        Cint(0), Cint(0), pointer([0.0]),
+        Cint(1), Cint(1), pointer(err), Cint(length(err))
+    )
+
+    @test status == 0
+    @test all(isfinite, att_conf[t0 + 1:end])
+    @test all(isfinite, lb_conf[t0 + 1:end])
+    @test all(isfinite, ub_conf[t0 + 1:end])
+    @test all(isfinite, pval_conf[t0 + 1:end])
+end
