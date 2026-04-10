@@ -4,9 +4,12 @@
 resolve_column_name <- function(expr, env) {
   if (is.symbol(expr)) {
     name <- as.character(expr)
-    value <- tryCatch(get(name, envir = env, inherits = FALSE), error = function(e) NULL)
+    value <- tryCatch(get(name, envir = env, inherits = TRUE), error = function(e) NULL)
     if (is.character(value) && length(value) == 1L && nzchar(value)) {
       return(value)
+    }
+    if (is.name(value) && length(value) == 1L && nzchar(as.character(value))) {
+      return(as.character(value))
     }
     return(name)
   }

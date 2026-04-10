@@ -46,6 +46,33 @@ On Linux, swap the library filename to `libstatlibbackend.so`.
 - `figures/ols_vs_lm_bar.png`: grouped warm-runtime bar chart
 - `figures/ols_vs_lm_line.png`: warm-runtime scaling line chart
 
+## `augsynth`, `metricsjl`, and `gsynth` Benchmark
+
+This folder also supports a single-case comparison script for synthetic control-style estimation:
+
+- `metricsjl::augsynth()` (compiled backend)
+- `augsynth::augsynth()` (reference R implementation)
+- `gsynth::gsynth()` (if available; optional)
+
+Run:
+
+```bash
+R CMD INSTALL -l /tmp/metricsjl-lib statlibR
+R_LIBS=/tmp/metricsjl-lib \
+METRICSJL_BACKEND_LIB=/absolute/path/to/libstatlibbackend.dylib \
+Rscript statlibR/inst/benchmarks/benchmark_augsynth_vs_gsynth.R \
+  --output-dir statlibR/inst/benchmarks \
+  --reps 20
+```
+
+Use `--skip-gsynth` if gsynth is not installed.
+
+## `augsynth` vs `gsynth` Outputs
+
+- `results/augsynth_vs_gsynth_timings.csv`: per-iteration raw timings in milliseconds
+- `results/augsynth_vs_gsynth_summary.csv`: averaged summaries and speedup against `metricsjl`
+- `results/benchmark_metadata.txt`: run metadata, package versions, and backend path
+
 ## Current Charts
 
 These checked-in figures were generated on `2026-04-08` with:

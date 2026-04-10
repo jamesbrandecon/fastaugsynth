@@ -27,6 +27,19 @@ test_that("single-period SCM matches upstream basque answers", {
   expect_equal(predict(syn), predict(syn_rev), tolerance = 1e-6)
 })
 
+test_that("single-augsynth accepts named symbols via variables for unit and time", {
+  basque <- basque_panel()
+
+  unit_var <- as.name("regionno")
+  time_var <- as.name("year")
+
+  syn <- augsynth(gdpcap ~ trt, unit_var, time_var, basque, progfunc = "None", scm = TRUE, t_int = 1975)
+  baseline <- augsynth(gdpcap ~ trt, regionno, year, basque, progfunc = "None", scm = TRUE, t_int = 1975)
+
+  expect_equal(c(syn$weights), c(baseline$weights), tolerance = 1e-6)
+  expect_equal(mean(summary(syn, inf = FALSE)$att$Estimate), mean(summary(baseline, inf = FALSE)$att$Estimate), tolerance = 1e-6)
+})
+
 test_that("single-period ridge ASCM matches upstream basque answers", {
   basque <- basque_panel()
 
