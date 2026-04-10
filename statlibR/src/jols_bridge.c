@@ -313,7 +313,7 @@ SEXP C_jackknife_plus(SEXP X_, SEXP y_, SEXP trt_, SEXP ridge_,
     Rf_error("Symbol jackknife_plus not found in backend library");
   }
 
-  int total = n + tpost + 1;
+  int total = t0 + tpost + 1;
   SEXP att = PROTECT(Rf_allocVector(REALSXP, total));
   SEXP lb = PROTECT(Rf_allocVector(REALSXP, total));
   SEXP ub = PROTECT(Rf_allocVector(REALSXP, total));
@@ -378,7 +378,7 @@ SEXP C_jackknife_unit_std(SEXP X_, SEXP y_, SEXP trt_, SEXP ridge_,
     Rf_error("Symbol jackknife_unit_std not found in backend library");
   }
 
-  int total = n + tpost + 1;
+  int total = t0 + tpost + 1;
   SEXP att = PROTECT(Rf_allocVector(REALSXP, total));
   SEXP se = PROTECT(Rf_allocVector(REALSXP, total));
   char errbuf[512];
@@ -454,7 +454,7 @@ SEXP C_conformal_inference(SEXP X_, SEXP y_, SEXP trt_, SEXP ridge_,
     Rf_error("Symbol conformal_inference not found in backend library");
   }
 
-  int total = n + tpost + 1;
+  int total = t0 + tpost + 1;
   SEXP att = PROTECT(Rf_allocVector(REALSXP, total));
   SEXP lb = PROTECT(Rf_allocVector(REALSXP, total));
   SEXP ub = PROTECT(Rf_allocVector(REALSXP, total));
