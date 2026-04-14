@@ -41,6 +41,60 @@
   )
 }
 
+.normalize_conformal_mode <- function(conformal_mode) {
+  if (is.null(conformal_mode) || length(conformal_mode) == 0L) {
+    return("fast")
+  }
+
+  mode <- tolower(as.character(conformal_mode[[1L]]))
+  if (mode %in% c("fast", "adaptive")) {
+    return("fast")
+  }
+  if (mode %in% c("reference", "reference_conformal", "grid", "fixed_grid")) {
+    return("reference")
+  }
+
+  stop(
+    "conformal_mode must be one of: fast, reference",
+    call. = FALSE
+  )
+}
+
+augsynth_inference_backend <- function(ascm, inf_type,
+                                       alpha = 0.05, conservative = FALSE,
+                                       type = "block", q = 1,
+                                       ns = 1000, grid_size = 50,
+                                       conformal_mode = "fast") {
+  params <- .augsynth_inference_params(ascm)
+  wide_data <- ascm$data
+  libpath <- tryCatch(ensure_backend_available(), error = function(e) "")
+  if (!nzchar(libpath) || !file.exists(libpath)) {
+    return(NULL)
+  }
+  conformal_mode <- .normalize_conformal_mode(conformal_mode)
+
+  .Call(
+    C_augsynth_inference,
+    as.matrix(wide_data$X),
+    as.matrix(wide_data$y),
+    as.double(wide_data$trt),
+    inf_type,
+    as.double(alpha),
+    as.logical(conservative),
+    type,
+    as.double(q),
+    as.integer(ns),
+    as.integer(grid_size),
+    conformal_mode,
+    as.logical(params$ridge),
+    as.logical(params$scm),
+    as.double(params$lambda),
+    as.integer(params$holdout_length),
+    as.logical(params$min1se),
+    libpath
+  )
+}
+
 drop_time_t <- function(wide_data, Z, t_drop) {
   new_wide_data <- list()
   new_wide_data$trt <- wide_data$trt
@@ -62,26 +116,12 @@ drop_time_t <- function(wide_data, Z, t_drop) {
 }
 
 time_jackknife_plus <- function(ascm, alpha = 0.05, conservative = FALSE) {
-  params <- .augsynth_inference_params(ascm)
-  wide_data <- ascm$data
-  backend <- tryCatch({
-    .Call(
-      C_jackknife_plus,
-      as.matrix(wide_data$X),
-      as.matrix(wide_data$y),
-      as.double(wide_data$trt),
-      as.logical(params$ridge),
-      as.logical(params$scm),
-      as.double(params$lambda),
-      as.double(alpha),
-      as.logical(conservative),
-      as.integer(params$holdout_length),
-      as.logical(params$min1se),
-      ensure_backend_available()
-    )
-  }, error = function(e) {
-    NULL
-  })
+  backend <- augsynth_inference_backend(
+    ascm = ascm,
+    inf_type = "jackknife+",
+    alpha = alpha,
+    conservative = conservative
+  )
   if (!is.null(backend)) {
     return(backend)
   }
@@ -249,7 +289,8 @@ compute_permute_ci_linear <- function(wide_data, ascm, grid_int, grid_slope,
 
 conformal_inf <- function(ascm, alpha = 0.05,
                           stat_func = NULL, type = "iid",
-                          q = 1, ns = 1000, grid_size = 50) {
+                          q = 1, ns = 1000, grid_size = 50,
+                          conformal_mode = "fast") {
   if (!is.null(stat_func)) {
     return(
       .conformal_inf(
@@ -264,29 +305,16 @@ conformal_inf <- function(ascm, alpha = 0.05,
     )
   }
 
-  params <- .augsynth_inference_params(ascm)
-  wide_data <- ascm$data
-  backend <- tryCatch({
-    .Call(
-      C_conformal_inference,
-      as.matrix(wide_data$X),
-      as.matrix(wide_data$y),
-      as.double(wide_data$trt),
-      as.logical(params$ridge),
-      as.logical(params$scm),
-      as.double(params$lambda),
-      as.double(alpha),
-      as.character(type),
-      as.double(q),
-      as.integer(ns),
-      as.integer(grid_size),
-      as.integer(params$holdout_length),
-      as.logical(params$min1se),
-      ensure_backend_available()
-    )
-  }, error = function(e) {
-    NULL
-  })
+  backend <- augsynth_inference_backend(
+    ascm = ascm,
+    inf_type = "conformal",
+    alpha = alpha,
+    type = type,
+    q = q,
+    ns = ns,
+    grid_size = grid_size,
+    conformal_mode = conformal_mode
+  )
   if (!is.null(backend)) {
     return(backend)
   }
@@ -402,24 +430,7 @@ drop_unit_i <- function(wide_data, Z, i) {
 }
 
 jackknife_se_single <- function(ascm) {
-  params <- .augsynth_inference_params(ascm)
-  wide_data <- ascm$data
-  backend <- tryCatch({
-    .Call(
-      C_jackknife_unit_std,
-      as.matrix(wide_data$X),
-      as.matrix(wide_data$y),
-      as.double(wide_data$trt),
-      as.logical(params$ridge),
-      as.logical(params$scm),
-      as.double(params$lambda),
-      as.integer(params$holdout_length),
-      as.logical(params$min1se),
-      ensure_backend_available()
-    )
-  }, error = function(e) {
-    NULL
-  })
+  backend <- augsynth_inference_backend(ascm = ascm, inf_type = "jackknife")
   if (!is.null(backend)) {
     return(backend)
   }

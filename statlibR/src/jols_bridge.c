@@ -49,6 +49,14 @@ typedef int (*conformal_inference_fn)(int, int, int,
                                       int, int, const double*,
                                       int, int, char*, int);
 
+typedef int (*augsynth_inference_fn)(int, int, int,
+                                      const double*, const double*, const double*,
+                                      double*, double*, double*,
+                                      double*, double*, double*,
+                                      int, double, int, int, double, int, int, int,
+                                      int, int, const double*,
+                                      int, int, char*, int);
+
 typedef void (*init_julia_fn)(int, char**);
 
 static void* backend_handle = NULL;
@@ -59,6 +67,7 @@ static fit_ridge_augsynth_inner_fn fit_ridge_augsynth_inner_ptr = NULL;
 static jackknife_plus_fn jackknife_plus_ptr = NULL;
 static jackknife_unit_std_fn jackknife_unit_std_ptr = NULL;
 static conformal_inference_fn conformal_inference_ptr = NULL;
+static augsynth_inference_fn augsynth_inference_ptr = NULL;
 static init_julia_fn init_julia_ptr = NULL;
 static char backend_libpath[4096] = "";
 
@@ -497,6 +506,150 @@ SEXP C_conformal_inference(SEXP X_, SEXP y_, SEXP trt_, SEXP ridge_,
   return out;
 }
 
+SEXP C_augsynth_inference(SEXP X_, SEXP y_, SEXP trt_, SEXP inf_type_,
+                          SEXP alpha_, SEXP conservative_,
+                          SEXP type_, SEXP q_, SEXP ns_, SEXP grid_size_, SEXP conformal_mode_,
+                          SEXP ridge_, SEXP scm_, SEXP lambda_,
+                          SEXP holdout_length_, SEXP min1se_,
+                          SEXP libpath_) {
+  if (!Rf_isMatrix(X_) || TYPEOF(X_) != REALSXP) Rf_error("X must be a numeric matrix");
+  if (!Rf_isMatrix(y_) || TYPEOF(y_) != REALSXP) Rf_error("y must be a numeric matrix");
+  if (TYPEOF(trt_) != REALSXP) Rf_error("trt must be numeric");
+  if (TYPEOF(alpha_) != REALSXP) Rf_error("alpha must be numeric");
+  if (TYPEOF(conservative_) != LGLSXP && TYPEOF(conservative_) != INTSXP) Rf_error("conservative must be logical");
+  if (TYPEOF(q_) != REALSXP) Rf_error("q must be numeric");
+  if (TYPEOF(ns_) != INTSXP && TYPEOF(ns_) != REALSXP) Rf_error("ns must be integer");
+  if (TYPEOF(grid_size_) != INTSXP && TYPEOF(grid_size_) != REALSXP) Rf_error("grid_size must be integer");
+  if (TYPEOF(conformal_mode_) != STRSXP && TYPEOF(conformal_mode_) != INTSXP &&
+      TYPEOF(conformal_mode_) != REALSXP && TYPEOF(conformal_mode_) != NILSXP) {
+    Rf_error("conformal_mode must be a string, integer, or NULL");
+  }
+  if (TYPEOF(ridge_) != LGLSXP && TYPEOF(ridge_) != INTSXP) Rf_error("ridge must be logical");
+  if (TYPEOF(scm_) != LGLSXP && TYPEOF(scm_) != INTSXP) Rf_error("scm must be logical");
+  if (TYPEOF(lambda_) != REALSXP) Rf_error("lambda must be numeric");
+  if (Rf_length(lambda_) != 1) Rf_error("lambda must be length 1");
+  if (TYPEOF(holdout_length_) != INTSXP && TYPEOF(holdout_length_) != REALSXP) Rf_error("holdout_length must be integer");
+  if (TYPEOF(min1se_) != LGLSXP && TYPEOF(min1se_) != INTSXP) Rf_error("min1se must be logical");
+  if (TYPEOF(libpath_) != STRSXP || Rf_length(libpath_) != 1) Rf_error("libpath must be a scalar string");
+
+  int inf_type = 0;
+  if (TYPEOF(inf_type_) == STRSXP && Rf_length(inf_type_) == 1) {
+    const char* type = CHAR(STRING_ELT(inf_type_, 0));
+    if (strcmp(type, "jackknife") == 0) {
+      inf_type = 1;
+    } else if (strcmp(type, "jackknife+") == 0 || strcmp(type, "jackknife_plus") == 0) {
+      inf_type = 2;
+    } else if (strcmp(type, "conformal") == 0) {
+      inf_type = 3;
+    } else {
+      Rf_error("inf_type must be one of: jackknife, jackknife+, conformal");
+    }
+  } else if (TYPEOF(inf_type_) == INTSXP || TYPEOF(inf_type_) == REALSXP) {
+    inf_type = (int)Rf_asInteger(inf_type_);
+  } else {
+    Rf_error("inf_type must be a string or integer");
+  }
+
+  SEXP xdim = Rf_getAttrib(X_, R_DimSymbol);
+  int n = INTEGER(xdim)[0];
+  int t0 = INTEGER(xdim)[1];
+  SEXP ydim = Rf_getAttrib(y_, R_DimSymbol);
+  int tpost = INTEGER(ydim)[1];
+  if (INTEGER(ydim)[0] != n) Rf_error("nrow(y) must equal nrow(X)");
+  if (Rf_length(trt_) != n) Rf_error("length(trt) must equal nrow(X)");
+
+  const char* libpath = CHAR(STRING_ELT(libpath_, 0));
+  void* h = load_backend(libpath);
+
+  if (augsynth_inference_ptr == NULL) {
+    augsynth_inference_ptr = (augsynth_inference_fn)dlsym(h, "augsynth_inference");
+  }
+  if (augsynth_inference_ptr == NULL) {
+    Rf_error("Symbol augsynth_inference not found in backend library");
+  }
+
+  int total = t0 + tpost + 1;
+  SEXP att = PROTECT(Rf_allocVector(REALSXP, total));
+  SEXP lb = PROTECT(Rf_allocVector(REALSXP, total));
+  SEXP ub = PROTECT(Rf_allocVector(REALSXP, total));
+  SEXP se = PROTECT(Rf_allocVector(REALSXP, total));
+  SEXP heldout_att = PROTECT(Rf_allocVector(REALSXP, total));
+  SEXP p_val = PROTECT(Rf_allocVector(REALSXP, total));
+  int type = 1;
+  if (TYPEOF(type_) == STRSXP && Rf_length(type_) == 1) {
+    const char* type_str = CHAR(STRING_ELT(type_, 0));
+    type = (strcmp(type_str, "iid") == 0) ? 0 : 1;
+  } else if (TYPEOF(type_) == INTSXP) {
+    type = Rf_asInteger(type_);
+  } else if (TYPEOF(type_) == REALSXP) {
+    type = (int)Rf_asReal(type_);
+  } else if (TYPEOF(type_) == NILSXP) {
+    type = 1;
+  } else {
+    Rf_error("type must be a string, integer, or NULL");
+  }
+
+  int conformal_mode = 0;
+  if (TYPEOF(conformal_mode_) == STRSXP && Rf_length(conformal_mode_) == 1) {
+    const char* mode_str = CHAR(STRING_ELT(conformal_mode_, 0));
+    if (strcmp(mode_str, "fast") == 0 || strcmp(mode_str, "adaptive") == 0) {
+      conformal_mode = 0;
+    } else if (strcmp(mode_str, "reference") == 0 || strcmp(mode_str, "reference_conformal") == 0 ||
+               strcmp(mode_str, "grid") == 0 || strcmp(mode_str, "fixed_grid") == 0) {
+      conformal_mode = 1;
+    } else {
+      Rf_error("conformal_mode must be one of: fast, reference");
+    }
+  } else if (TYPEOF(conformal_mode_) == INTSXP || TYPEOF(conformal_mode_) == REALSXP) {
+    conformal_mode = (int)Rf_asInteger(conformal_mode_);
+  } else if (TYPEOF(conformal_mode_) == NILSXP) {
+    conformal_mode = 0;
+  }
+
+  char errbuf[512];
+  memset(errbuf, 0, sizeof(errbuf));
+
+  int status = augsynth_inference_ptr(
+    n, t0, tpost,
+    REAL(X_), REAL(y_), REAL(trt_),
+    REAL(att), REAL(lb), REAL(ub),
+    REAL(se), REAL(heldout_att), REAL(p_val),
+    inf_type, Rf_asReal(alpha_), Rf_asLogical(conservative_), type,
+    Rf_asReal(q_), Rf_asInteger(ns_), Rf_asInteger(grid_size_), conformal_mode,
+    Rf_asLogical(ridge_), Rf_asLogical(scm_),
+    REAL(lambda_),
+    Rf_asInteger(holdout_length_),
+    Rf_asLogical(min1se_),
+    errbuf, 512
+  );
+  if (status != 0) Rf_error("Backend augsynth_inference failed with status %d: %s", status, errbuf);
+
+  SEXP out = PROTECT(Rf_allocVector(VECSXP, 7));
+  SET_VECTOR_ELT(out, 0, att);
+  SET_VECTOR_ELT(out, 1, lb);
+  SET_VECTOR_ELT(out, 2, ub);
+  SET_VECTOR_ELT(out, 3, se);
+  SET_VECTOR_ELT(out, 4, heldout_att);
+  SET_VECTOR_ELT(out, 5, p_val);
+
+  SEXP alpha_out = PROTECT(Rf_allocVector(REALSXP, 1));
+  REAL(alpha_out)[0] = Rf_asReal(alpha_);
+  SET_VECTOR_ELT(out, 6, alpha_out);
+
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, 7));
+  SET_STRING_ELT(names, 0, Rf_mkChar("att"));
+  SET_STRING_ELT(names, 1, Rf_mkChar("lb"));
+  SET_STRING_ELT(names, 2, Rf_mkChar("ub"));
+  SET_STRING_ELT(names, 3, Rf_mkChar("se"));
+  SET_STRING_ELT(names, 4, Rf_mkChar("heldout_att"));
+  SET_STRING_ELT(names, 5, Rf_mkChar("p_val"));
+  SET_STRING_ELT(names, 6, Rf_mkChar("alpha"));
+  Rf_setAttrib(out, R_NamesSymbol, names);
+
+  UNPROTECT(9);
+  return out;
+}
+
 static const R_CallMethodDef CallEntries[] = {
   {"C_jols_fit_xy", (DL_FUNC)&C_jols_fit_xy, 3},
   {"C_jridge_fit_xy", (DL_FUNC)&C_jridge_fit_xy, 4},
@@ -505,6 +658,7 @@ static const R_CallMethodDef CallEntries[] = {
   {"C_jackknife_plus", (DL_FUNC)&C_jackknife_plus, 11},
   {"C_jackknife_unit_std", (DL_FUNC)&C_jackknife_unit_std, 9},
   {"C_conformal_inference", (DL_FUNC)&C_conformal_inference, 13},
+  {"C_augsynth_inference", (DL_FUNC)&C_augsynth_inference, 17},
   {NULL, NULL, 0}
 };
 

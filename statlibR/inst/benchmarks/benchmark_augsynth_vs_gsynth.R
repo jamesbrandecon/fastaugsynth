@@ -23,29 +23,76 @@ script_dir <- function() {
   normalizePath(getwd(), mustWork = FALSE)
 }
 
-load_dataset <- function() {
-  if (!requireNamespace("Synth", quietly = TRUE)) {
-    stop(
-      "Package 'Synth' is required for the built-in basque benchmark dataset.",
-      call. = FALSE
-    )
+parse_int_scalar <- function(value, arg_name, min_value = 1L) {
+  if (is.null(value)) {
+    stop(sprintf("Missing value for --%s", arg_name), call. = FALSE)
   }
-  library(Synth)
-  data("basque", package = "Synth")
-  basque <- transform(
-    basque,
-    trt = ifelse(year < 1975, 0, ifelse(regionno == 17, 1, 0))
-  )
-  subset(basque, regionno != 1)
+  out <- suppressWarnings(as.integer(value))
+  if (length(out) != 1L || is.na(out) || out < min_value) {
+    stop(sprintf("Invalid --%s value: %s", arg_name, value), call. = FALSE)
+  }
+  out
 }
+
+parse_int_vector <- function(value, arg_name) {
+  values <- unlist(strsplit(value, "[, ]+"), use.names = FALSE)
+  values <- suppressWarnings(as.integer(values))
+  values <- values[!is.na(values)]
+  values <- unique(values[values > 0L])
+  if (!length(values)) {
+    stop(sprintf("Invalid --%s values: %s", arg_name, value), call. = FALSE)
+  }
+  sort(values)
+}
+
+parse_inference_modes <- function(value) {
+  if (is.null(value)) {
+    return(character(0))
+  }
+  modes <- unique(unlist(strsplit(value, "[, ]+"), use.names = FALSE))
+  modes <- modes[nzchar(modes)]
+  modes <- sort(unique(modes))
+  modes <- modes[modes != "none"]
+  if ("both" %in% modes) {
+    modes <- union(c("jackknife", "conformal"), setdiff(modes, c("jackknife", "conformal", "both")))
+  }
+  valid <- c("jackknife", "conformal")
+  if (length(modes)) {
+    invalid <- setdiff(modes, valid)
+    if (length(invalid)) {
+      stop(
+        sprintf(
+          "Invalid --inference value(s): %s (expected comma-separated values from: %s)",
+          paste(invalid, collapse = ", "),
+          paste(valid, collapse = ", ")
+        ),
+        call. = FALSE
+      )
+    }
+  }
+  modes
+}
+
+sweep_labels <- c(
+  donors = "donors",
+  pre = "pre_periods",
+  post = "post_periods"
+)
 
 parse_cli_args <- function(args) {
   parsed <- list(
     output_dir = script_dir(),
+    figures_dir = NULL,
     backend_lib = backend_env_var(),
     reps = 20L,
     with_gsynth = TRUE,
-    seed = 20260409L
+    seed = 20260409L,
+    sweep = "donors",
+    sweep_values = NULL,
+    donors = 30L,
+    pre_periods = 20L,
+    post_periods = 10L,
+    inference = c("jackknife", "conformal")
   )
 
   idx <- 1L
@@ -54,19 +101,42 @@ parse_cli_args <- function(args) {
     if (arg == "--output-dir") {
       idx <- idx + 1L
       parsed$output_dir <- args[[idx]]
+    } else if (arg == "--figures-dir") {
+      idx <- idx + 1L
+      parsed$figures_dir <- args[[idx]]
     } else if (arg == "--backend-lib") {
       idx <- idx + 1L
       parsed$backend_lib <- args[[idx]]
     } else if (arg == "--reps") {
       idx <- idx + 1L
-      parsed$reps <- as.integer(args[[idx]])
+      parsed$reps <- parse_int_scalar(args[[idx]], "reps")
     } else if (arg == "--seed") {
       idx <- idx + 1L
       parsed$seed <- as.integer(args[[idx]])
+    } else if (arg == "--sweep") {
+      idx <- idx + 1L
+      parsed$sweep <- args[[idx]]
+    } else if (arg == "--sweep-values") {
+      idx <- idx + 1L
+      parsed$sweep_values <- parse_int_vector(args[[idx]], "sweep-values")
+    } else if (arg == "--donors") {
+      idx <- idx + 1L
+      parsed$donors <- parse_int_scalar(args[[idx]], "donors")
+    } else if (arg == "--pre-periods") {
+      idx <- idx + 1L
+      parsed$pre_periods <- parse_int_scalar(args[[idx]], "pre-periods")
+    } else if (arg == "--post-periods") {
+      idx <- idx + 1L
+      parsed$post_periods <- parse_int_scalar(args[[idx]], "post-periods")
     } else if (arg == "--skip-gsynth") {
       parsed$with_gsynth <- FALSE
     } else if (arg == "--with-gsynth") {
       parsed$with_gsynth <- TRUE
+    } else if (arg == "--inference") {
+      idx <- idx + 1L
+      parsed$inference <- parse_inference_modes(args[[idx]])
+    } else if (arg == "--skip-inference") {
+      parsed$inference <- character(0)
     } else {
       stop(sprintf("Unknown argument: %s", arg), call. = FALSE)
     }
@@ -74,8 +144,58 @@ parse_cli_args <- function(args) {
     idx <- idx + 1L
   }
 
+  if (!nzchar(parsed$sweep) || is.na(match(parsed$sweep, names(sweep_labels)))) {
+    stop(
+      sprintf(
+        "Invalid --sweep value: %s (expected one of %s)",
+        parsed$sweep,
+        paste(names(sweep_labels), collapse = ", ")
+      ),
+      call. = FALSE
+    )
+  }
   parsed$reps <- max(1L, parsed$reps)
+  if (!length(parsed$inference)) {
+    parsed$inference <- character(0)
+  }
   parsed
+}
+
+build_sweep_grid <- function(sweep, sweep_values, donors, pre_periods, post_periods) {
+  if (length(sweep_values) == 0L) {
+    sweep_values <- switch(
+      sweep,
+      donors = donors,
+      pre = pre_periods,
+      post = post_periods,
+      donors
+    )
+  } else {
+    if (sweep == "donors") {
+      donors <- sweep_values
+    } else if (sweep == "pre") {
+      pre_periods <- sweep_values
+    } else {
+      post_periods <- sweep_values
+    }
+  }
+
+  expand.grid(
+    donors = as.integer(donors),
+    pre_periods = as.integer(pre_periods),
+    post_periods = as.integer(post_periods),
+    stringsAsFactors = FALSE
+  )
+}
+
+build_scenario_label <- function(sweep, row) {
+  if (sweep == "donors") {
+    sprintf("donors=%d", row[["donors"]])
+  } else if (sweep == "pre") {
+    sprintf("pre=%d", row[["pre_periods"]])
+  } else {
+    sprintf("post=%d", row[["post_periods"]])
+  }
 }
 
 gsynth_supported <- function(fun, candidate) {
@@ -142,7 +262,223 @@ resolve_gsynth_fit <- function(formula, data, unit_name, time_name) {
   stop("Unable to call gsynth with any supported candidate signature.", call. = FALSE)
 }
 
-run_benchmark <- function(with_gsynth = TRUE, reps = 20L, seed = 20260409L) {
+simulate_augsynth_dataset <- function(n_donors, pre_periods, post_periods, seed,
+                                     outcome_name = "gdpcap",
+                                     unit_name = "regionno",
+                                     time_name = "year") {
+  if (n_donors < 1L) {
+    stop("n_donors must be >= 1", call. = FALSE)
+  }
+  if (pre_periods < 1L || post_periods < 1L) {
+    stop("pre_periods and post_periods must be >= 1", call. = FALSE)
+  }
+
+  n_units <- n_donors + 1L
+  unit_values <- paste0("u", seq_len(n_units))
+  time_values <- seq_len(pre_periods + post_periods)
+  treated_unit <- unit_values[[n_units]]
+  t_int <- pre_periods + 1L
+
+  panel <- expand.grid(
+    unit = unit_values,
+    time = time_values,
+    KEEP.OUT.ATTRS = FALSE,
+    stringsAsFactors = FALSE
+  )
+  panel <- setNames(panel, c(unit_name, time_name))
+  panel[[unit_name]] <- as.character(panel[[unit_name]])
+  panel[[time_name]] <- as.integer(panel[[time_name]])
+
+  set.seed(seed)
+  unit_effect <- rnorm(n_units, sd = 1.25)
+  time_wave <- sin(2 * pi * panel[[time_name]] / max(1L, max(time_values))) + 0.03 * panel[[time_name]]
+  unit_idx <- match(panel[[unit_name]], unit_values)
+  trt <- as.integer(panel[[unit_name]] == treated_unit & panel[[time_name]] >= t_int)
+
+  baseline <- 4.0 + 2.0 * unit_effect[unit_idx] + 0.15 * panel[[time_name]] + 0.9 * time_wave
+  treatment <- as.numeric(trt) * (5.0 + 0.1 * (panel[[time_name]] - pre_periods))
+  panel[[outcome_name]] <- baseline + treatment + rnorm(nrow(panel), sd = 0.75)
+  panel$trt <- trt
+  panel <- panel[order(panel[[unit_name]], panel[[time_name]]), ]
+
+  list(
+    data = panel,
+    outcome = outcome_name,
+    unit = unit_name,
+    time = time_name,
+    t_int = t_int
+  )
+}
+
+run_scenario_benchmark <- function(scenario, scenario_id, seed, with_gsynth, reps, inference_modes) {
+  dataset <- simulate_augsynth_dataset(
+    n_donors = scenario$donors,
+    pre_periods = scenario$pre_periods,
+    post_periods = scenario$post_periods,
+    seed = seed + scenario_id,
+    outcome_name = "gdpcap",
+    unit_name = "regionno",
+    time_name = "year"
+  )
+
+  formula <- as.formula(sprintf("%s ~ trt", dataset$outcome))
+  unit_name <- as.character(dataset$unit)
+  time_name <- as.character(dataset$time)
+  t_int <- dataset$t_int
+  panel <- dataset$data
+
+  unit_symbol <- as.name(unit_name)
+  time_symbol <- as.name(time_name)
+
+  add_formula_inference <- function(fit_expr, inf_type) {
+    as.call(c(
+      list(quote(summary), fit_expr),
+      list(
+        inf = TRUE,
+        inf_type = inf_type
+      )
+    ))
+  }
+
+  metricsjl_fit_expr <- as.call(list(
+    quote(metricsjl::augsynth),
+    as.name("formula"),
+    unit_symbol,
+    time_symbol,
+    as.name("panel"),
+    progfunc = "None",
+    scm = TRUE,
+    t_int = as.name("t_int")
+  ))
+  augsynth_fit_expr <- as.call(list(
+    quote(augsynth::augsynth),
+    as.name("formula"),
+    unit_symbol,
+    time_symbol,
+    as.name("panel"),
+    progfunc = "None",
+    scm = TRUE,
+    t_int = as.name("t_int")
+  ))
+  gsynth_fit_expr <- as.call(list(
+    as.name("resolve_gsynth_fit"),
+    as.name("formula"),
+    as.name("panel"),
+    as.name(unit_name),
+    as.name(time_name)
+  ))
+
+  method_exprs <- list(
+    metricsjl = metricsjl_fit_expr,
+    augsynth = augsynth_fit_expr
+  )
+  if (with_gsynth) {
+    method_exprs$gsynth <- gsynth_fit_expr
+  }
+
+  if ("jackknife" %in% inference_modes) {
+    method_exprs$metricsjl_jackknife <- add_formula_inference(metricsjl_fit_expr, "jackknife")
+    method_exprs$augsynth_jackknife <- add_formula_inference(augsynth_fit_expr, "jackknife")
+  }
+  if ("conformal" %in% inference_modes) {
+    method_exprs$metricsjl_conformal <- add_formula_inference(metricsjl_fit_expr, "conformal")
+    method_exprs$augsynth_conformal <- add_formula_inference(augsynth_fit_expr, "conformal")
+  }
+
+  mark <- do.call(
+    bench::mark,
+    c(
+      method_exprs,
+      list(
+        iterations = reps,
+        check = FALSE,
+        min_time = 0
+      )
+    )
+  )
+
+  method_to_phase <- function(method) {
+    if (method == "metricsjl" || method == "augsynth" || method == "gsynth") {
+      return("estimate")
+    }
+    if (grepl("_jackknife$", method)) {
+      return("jackknife")
+    }
+    if (grepl("_conformal$", method)) {
+      return("conformal")
+    }
+    "other"
+  }
+
+  timings <- as.data.frame(mark)
+  timings$method <- names(method_exprs)
+  timings <- timings[, c("method", "min", "median", "itr/sec", "mem_alloc")]
+  timings$phase <- vapply(timings$method, method_to_phase, character(1))
+  timings$min_ms <- as.numeric(timings$min) * 1000
+  timings$median_ms <- as.numeric(timings$median) * 1000
+  timings$itr_per_sec <- as.numeric(timings$`itr/sec`)
+  timings$mem_alloc_mb <- as.numeric(timings$mem_alloc) / 1024^2
+  timings <- timings[, c(
+    "method",
+    "phase",
+    "min_ms",
+    "median_ms",
+    "itr_per_sec",
+    "mem_alloc_mb"
+  )]
+  timings$donors <- scenario$donors
+  timings$pre_periods <- scenario$pre_periods
+  timings$post_periods <- scenario$post_periods
+  timings$scenario <- scenario_id
+  timings$sweep_value <- scenario$scenario_value
+
+  warm_summary <- aggregate(
+    cbind(min_ms, median_ms, itr_per_sec, mem_alloc_mb) ~
+      method + phase + scenario + sweep_value + donors + pre_periods + post_periods,
+    data = timings,
+    FUN = mean
+  )
+  warm_summary <- warm_summary[order(warm_summary$scenario, warm_summary$phase, warm_summary$median_ms), ]
+  warm_summary$median_ms_over_metricsjl <- NA_real_
+  warm_summary$itr_per_sec_vs_metricsjl <- NA_real_
+  phase_base <- list(
+    estimate = "metricsjl",
+    jackknife = "metricsjl_jackknife",
+    conformal = "metricsjl_conformal"
+  )
+
+  for (scenario_idx in unique(warm_summary$scenario)) {
+    for (phase_idx in unique(warm_summary$phase)) {
+      if (is.na(phase_idx)) {
+        next
+      }
+      base_method <- phase_base[[phase_idx]]
+      if (is.null(base_method)) {
+        next
+      }
+      base_rows <- warm_summary$scenario == scenario_idx & warm_summary$phase == phase_idx & warm_summary$method == base_method
+      if (!any(base_rows)) {
+        next
+      }
+      base <- warm_summary$median_ms[base_rows][[1]]
+      base_itr <- warm_summary$itr_per_sec[base_rows][[1]]
+      row_idx <- warm_summary$scenario == scenario_idx & warm_summary$phase == phase_idx
+      warm_summary$median_ms_over_metricsjl[row_idx] <- warm_summary$median_ms[row_idx] / base
+      warm_summary$itr_per_sec_vs_metricsjl[row_idx] <- warm_summary$itr_per_sec[row_idx] / base_itr
+    }
+  }
+
+  list(
+    timings = timings,
+    summary = warm_summary,
+    methods = names(method_exprs),
+    with_gsynth = with_gsynth
+  )
+}
+
+run_benchmark <- function(sweep = "donors", sweep_values = NULL, reps = 20L, seed = 20260409L,
+                          with_gsynth = TRUE, inference = c("jackknife", "conformal"),
+                          donors = 30L, pre_periods = 20L, post_periods = 10L) {
   if (!requireNamespace("bench", quietly = TRUE)) {
     stop("Package 'bench' is required to run benchmark.", call. = FALSE)
   }
@@ -158,101 +494,120 @@ run_benchmark <- function(with_gsynth = TRUE, reps = 20L, seed = 20260409L) {
     message("Skipping gsynth because package 'gsynth' is not installed.")
   }
 
-  set.seed(seed)
-  basque_panel <- load_dataset()
-  unit_name <- "regionno"
-  time_name <- "year"
-  formula <- gdpcap ~ trt
-
-  if (with_gsynth) {
-    mark <- bench::mark(
-      metricsjl = metricsjl::augsynth(
-        formula,
-        unit_name,
-        time_name,
-        basque_panel,
-        progfunc = "None",
-        scm = TRUE,
-        t_int = 1975
-      ),
-      augsynth = augsynth::augsynth(
-        formula,
-        unit_name,
-        time_name,
-        basque_panel,
-        progfunc = "None",
-        scm = TRUE,
-        t_int = 1975
-      ),
-      gsynth = resolve_gsynth_fit(formula, basque_panel, unit_name, time_name),
-      iterations = reps,
-      check = FALSE,
-      min_time = 0
-    )
-  } else {
-    mark <- bench::mark(
-      metricsjl = metricsjl::augsynth(
-        formula,
-        unit_name,
-        time_name,
-        basque_panel,
-        progfunc = "None",
-        scm = TRUE,
-        t_int = 1975
-      ),
-      augsynth = augsynth::augsynth(
-        formula,
-        unit_name,
-        time_name,
-        basque_panel,
-        progfunc = "None",
-        scm = TRUE,
-        t_int = 1975
-      ),
-      iterations = reps,
-      check = FALSE,
-      min_time = 0
-    )
-  }
-
-  timings <- as.data.frame(mark)
-  timings$method <- vapply(timings$expression, as.character, character(1))
-  timings <- timings[, c("method", "min", "median", "itr/sec", "mem_alloc")]
-  timings$min_ms <- as.numeric(timings$min) * 1000
-  timings$median_ms <- as.numeric(timings$median) * 1000
-  timings$itr_per_sec <- as.numeric(timings$`itr/sec`)
-  timings$mem_alloc_mb <- as.numeric(timings$mem_alloc) / 1024^2
-  timings <- timings[, c(
-    "method",
-    "min_ms",
-    "median_ms",
-    "itr_per_sec",
-    "mem_alloc_mb"
-  )]
-
-  warm_summary <- aggregate(
-    cbind(min_ms, median_ms, itr_per_sec, mem_alloc_mb) ~ method,
-    data = timings,
-    FUN = mean
+  scenario_grid <- build_sweep_grid(
+    sweep = sweep,
+    sweep_values = sweep_values,
+    donors = donors,
+    pre_periods = pre_periods,
+    post_periods = post_periods
   )
-  warm_summary <- warm_summary[order(warm_summary$median_ms), ]
+  scenario_grid$scenario <- vapply(
+    seq_len(nrow(scenario_grid)),
+    function(idx) build_scenario_label(sweep, scenario_grid[idx, ]),
+    character(1)
+  )
+  scenario_grid$scenario_value <- scenario_grid[[sweep_labels[[sweep]]]]
 
-  base_ms <- warm_summary$median_ms[warm_summary$method == "metricsjl"]
-  if (length(base_ms) != 1L) {
-    stop("Unable to locate metricsjl row for speedup calculation.", call. = FALSE)
-  }
-  warm_summary$median_ms_over_metricsjl <- warm_summary$median_ms / base_ms
-  warm_summary$itr_per_sec_vs_metricsjl <- warm_summary$itr_per_sec / warm_summary$itr_per_sec[warm_summary$method == "metricsjl"]
+  outputs <- lapply(
+    seq_len(nrow(scenario_grid)),
+    function(idx) {
+      run_scenario_benchmark(
+        scenario = scenario_grid[idx, ],
+        scenario_id = idx,
+        seed = seed + idx,
+        with_gsynth = with_gsynth,
+        reps = reps,
+        inference_modes = inference
+      )
+    }
+  )
+
+  timings <- do.call(rbind, lapply(outputs, function(x) x$timings))
+  summary <- do.call(rbind, lapply(outputs, function(x) x$summary))
+  methods <- outputs[[1]]$methods
 
   list(
     timings = timings,
-    summary = warm_summary,
-    methods = if (with_gsynth) c("metricsjl", "augsynth", "gsynth") else c("metricsjl", "augsynth"),
+    summary = summary,
+    methods = methods,
+    inference = inference,
+    scenarios = scenario_grid,
     with_gsynth = with_gsynth
   )
 }
 
-write_metadata <- function(output_dir, backend_lib, reps, seed, with_gsynth) {
+plot_bars_by_sweep <- function(summary, methods, sweep, output_dir) {
+  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+  method_colors <- c(
+    metricsjl = "#1b9e77",
+    augsynth = "#d95f02",
+    gsynth = "#7570b3",
+    metricsjl_jackknife = "#66c2a5",
+    augsynth_jackknife = "#fc8d62",
+    metricsjl_conformal = "#8da0cb",
+    augsynth_conformal = "#e78ac3"
+  )
+  method_order <- intersect(
+    methods,
+    c(
+      "metricsjl",
+      "augsynth",
+      "gsynth",
+      "metricsjl_jackknife",
+      "augsynth_jackknife",
+      "metricsjl_conformal",
+      "augsynth_conformal"
+    )
+  )
+  warm <- summary
+  label <- if (sweep == "donors") "donors" else if (sweep == "pre") "pre periods" else "post periods"
+  x_vals <- sort(unique(warm$sweep_value))
+  x <- vapply(x_vals, as.character, character(1))
+
+  bar_matrix <- do.call(rbind, lapply(method_order, function(method) {
+    vapply(
+      x_vals,
+      function(v) {
+        idx <- warm$method == method & warm$sweep_value == v
+        warm$median_ms[idx][1L]
+      },
+      numeric(1)
+    )
+  }))
+  rownames(bar_matrix) <- method_order
+  colnames(bar_matrix) <- x
+
+  bar_path <- file.path(output_dir, sprintf("augsynth_vs_gsynth_%s_bar.png", sweep))
+  png(bar_path, width = 1400, height = 900, res = 160)
+  old_par <- par(no.readonly = TRUE)
+  on.exit({
+    par(old_par)
+    dev.off()
+  }, add = TRUE)
+
+  par(mar = c(6, 5, 4, 1) + 0.1)
+  barplot(
+    bar_matrix,
+    beside = TRUE,
+    col = method_colors[method_order],
+    ylab = "Median elapsed per call (ms)",
+    main = sprintf("Augsynth timing sweep: %s", label),
+    xlab = label,
+    las = 2
+  )
+  legend(
+    "topleft",
+    legend = rownames(bar_matrix),
+    fill = method_colors[method_order],
+    bty = "n"
+  )
+  dev.off()
+  on.exit(NULL, add = FALSE)
+
+  c(bar = bar_path)
+}
+
+write_metadata <- function(output_dir, backend_lib, reps, seed, sweep, sweep_values, inference, with_gsynth, scenarios) {
   meta_path <- file.path(output_dir, "results", "benchmark_metadata.txt")
   dir.create(dirname(meta_path), recursive = TRUE, showWarnings = FALSE)
 
@@ -261,6 +616,9 @@ write_metadata <- function(output_dir, backend_lib, reps, seed, with_gsynth) {
     sprintf("backend_lib: %s", backend_lib),
     sprintf("reps: %d", reps),
     sprintf("seed: %d", seed),
+    sprintf("sweep: %s", sweep),
+    sprintf("sweep_values: %s", paste(as.character(sweep_values), collapse = ",")),
+    sprintf("inference: %s", if (length(inference)) paste(inference, collapse = ",") else "none"),
     sprintf("with_gsynth: %s", as.character(with_gsynth)),
     sprintf("R.version: %s", R.version.string),
     sprintf("platform: %s", R.version$platform),
@@ -268,15 +626,37 @@ write_metadata <- function(output_dir, backend_lib, reps, seed, with_gsynth) {
     sprintf("augsynth.version: %s", as.character(utils::packageVersion("augsynth"))),
     if (isTRUE(with_gsynth)) sprintf("gsynth.version: %s", as.character(utils::packageVersion("gsynth"))) else "gsynth.version: not run"
   )
+  scenario_lines <- vapply(
+    seq_len(nrow(scenarios)),
+    function(idx) {
+      row <- scenarios[idx, ]
+      sprintf(
+        "scenario[%d]: donors=%d, pre_periods=%d, post_periods=%d",
+        idx,
+        as.integer(row$donors),
+        as.integer(row$pre_periods),
+        as.integer(row$post_periods)
+      )
+    },
+    character(1)
+  )
+  lines <- c(lines, scenario_lines)
   writeLines(lines, meta_path)
   meta_path
 }
 
 run_augsynth_vs_gsynth <- function(output_dir = script_dir(),
+                                   figures_dir = NULL,
                                    backend_lib = backend_env_var(),
                                    reps = 20L,
                                    with_gsynth = TRUE,
-                                   seed = 20260409L) {
+                                   inference = c("jackknife", "conformal"),
+                                   seed = 20260409L,
+                                   sweep = "donors",
+                                   sweep_values = NULL,
+                                   donors = 30L,
+                                   pre_periods = 20L,
+                                   post_periods = 10L) {
   if (!nzchar(backend_lib)) {
     stop(
       "Set METRICSJL_BACKEND_LIB or pass --backend-lib so augsynth() can find the compiled backend library.",
@@ -290,39 +670,102 @@ run_augsynth_vs_gsynth <- function(output_dir = script_dir(),
   Sys.setenv(METRICSJL_BACKEND_LIB = backend_lib)
 
   output_dir <- normalizePath(output_dir, mustWork = FALSE)
+  figures_dir <- if (nzchar(figures_dir %||% "")) {
+    normalizePath(figures_dir, mustWork = FALSE)
+  } else {
+    file.path(output_dir, "figures")
+  }
   results_dir <- file.path(output_dir, "results")
   dir.create(results_dir, recursive = TRUE, showWarnings = FALSE)
+  dir.create(figures_dir, recursive = TRUE, showWarnings = FALSE)
 
-  outputs <- run_benchmark(with_gsynth = with_gsynth, reps = reps, seed = seed)
+  outputs <- run_benchmark(
+    sweep = sweep,
+    sweep_values = sweep_values,
+    reps = reps,
+    seed = seed,
+    with_gsynth = with_gsynth,
+    inference = inference,
+    donors = donors,
+    pre_periods = pre_periods,
+    post_periods = post_periods
+  )
   timings <- outputs$timings
   summary <- outputs$summary
 
   write.csv(timings, file.path(results_dir, "augsynth_vs_gsynth_timings.csv"), row.names = FALSE)
   write.csv(summary, file.path(results_dir, "augsynth_vs_gsynth_summary.csv"), row.names = FALSE)
-  meta_path <- write_metadata(output_dir, backend_lib, reps, seed, outputs$with_gsynth)
+  write.csv(
+    summary[, c(
+      "scenario",
+      "sweep_value",
+      "phase",
+      "method",
+      "median_ms",
+      "median_ms_over_metricsjl",
+      "itr_per_sec_vs_metricsjl",
+      "mem_alloc_mb"
+    )],
+    file.path(results_dir, "augsynth_vs_gsynth_speedup.csv"),
+    row.names = FALSE
+  )
+  meta_path <- write_metadata(
+    output_dir = output_dir,
+    backend_lib = backend_lib,
+    reps = reps,
+    seed = seed,
+    sweep = sweep,
+    sweep_values = sweep_values %||% outputs$scenarios[[sweep_labels[[sweep]]]],
+    inference = inference,
+    with_gsynth = outputs$with_gsynth,
+    scenarios = outputs$scenarios
+  )
+
+  plot_paths <- plot_bars_by_sweep(
+    summary = summary,
+    methods = outputs$methods,
+    sweep = sweep,
+    output_dir = figures_dir
+  )
 
   list(
     timings = timings,
     summary = summary,
+    figures = plot_paths,
     metadata = meta_path,
-    output_dir = output_dir
+    output_dir = output_dir,
+    figures_dir = figures_dir,
+    scenarios = outputs$scenarios
   )
+}
+
+`%||%` <- function(lhs, rhs) {
+  if (is.null(lhs)) rhs else lhs
 }
 
 main <- function() {
   cli <- parse_cli_args(commandArgs(trailingOnly = TRUE))
   outputs <- run_augsynth_vs_gsynth(
     output_dir = cli$output_dir,
+    figures_dir = cli$figures_dir,
     backend_lib = cli$backend_lib,
     reps = cli$reps,
     with_gsynth = cli$with_gsynth,
-    seed = cli$seed
+    seed = cli$seed,
+    sweep = cli$sweep,
+    sweep_values = cli$sweep_values,
+    donors = cli$donors,
+    pre_periods = cli$pre_periods,
+    post_periods = cli$post_periods
+    ,
+    inference = cli$inference
   )
 
   cat("Augsynth vs gsynth summary:\n")
   print(outputs$summary)
   cat("\nWrote benchmark outputs to:\n")
   cat("  ", outputs$output_dir, "\n", sep = "")
+  cat("  ", outputs$figures_dir, "\n", sep = "")
 }
 
 if (sys.nframe() == 0L) {

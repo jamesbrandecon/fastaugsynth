@@ -567,8 +567,8 @@ single_augsynth <- function(form, unit, time, t_int, data,
                             ...) {
   call_name <- match.call()
   form <- Formula::Formula(form)
-  unit_name <- if (!is.null(.unit_name)) .unit_name else resolve_column_name(substitute(unit), environment())
-  time_name <- if (!is.null(.time_name)) .time_name else resolve_column_name(substitute(time), environment())
+  unit_name <- if (!is.null(.unit_name)) .unit_name else resolve_column_name(substitute(unit), parent.frame())
+  time_name <- if (!is.null(.time_name)) .time_name else resolve_column_name(substitute(time), parent.frame())
 
   if (is_multi_outcome_formula(form)) {
     stop("Multiple outcomes are not implemented in metricsjl v1", call. = FALSE)
@@ -608,8 +608,8 @@ augsynth <- function(form, unit, time, data, t_int = NULL, ...) {
     stop("Multiple outcomes are not implemented in metricsjl v1", call. = FALSE)
   }
 
-  unit_name <- resolve_column_name(substitute(unit), environment())
-  time_name <- resolve_column_name(substitute(time), environment())
+  unit_name <- resolve_column_name(substitute(unit), parent.frame())
+  time_name <- resolve_column_name(substitute(time), parent.frame())
   trt_times <- infer_treatment_schedule(data, unit_name, time_name, formula_treatment_expr(form))
 
   if (length(trt_times) > 1L) {

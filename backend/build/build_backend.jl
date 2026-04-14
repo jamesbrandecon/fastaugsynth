@@ -13,6 +13,7 @@ create_library(project_dir, out_dir;
     incremental = false,
     force = true,
     filter_stdlibs = false,
+    precompile_execution_file = joinpath(@__DIR__, "precompile_workload.jl"),
 )
 
 if Sys.isapple()
