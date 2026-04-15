@@ -112,8 +112,22 @@ test_that("conformal summary matches deterministic basque benchmarks", {
   syn <- augsynth(gdpcap ~ trt, regionno, year, basque, progfunc = "None", scm = TRUE, t_int = 1975)
   asyn <- augsynth(gdpcap ~ trt, regionno, year, basque, progfunc = "Ridge", scm = TRUE, lambda = 8, t_int = 1975)
 
-  conf_syn <- summary(syn, inf = TRUE, inf_type = "conformal", type = "block", grid_size = 11)
-  conf_asyn <- summary(asyn, inf = TRUE, inf_type = "conformal", type = "block", grid_size = 11)
+  conf_syn <- summary(
+    syn,
+    inf = TRUE,
+    inf_type = "conformal",
+    type = "block",
+    grid_size = 11,
+    conformal_mode = "reference"
+  )
+  conf_asyn <- summary(
+    asyn,
+    inf = TRUE,
+    inf_type = "conformal",
+    type = "block",
+    grid_size = 11,
+    conformal_mode = "reference"
+  )
 
   expect_equal(conf_syn$average_att$Estimate, -0.6915277, tolerance = 1e-4)
   expect_equal(conf_syn$average_att$p_val, 0.1860465, tolerance = 1e-6)
