@@ -535,7 +535,7 @@ fit_augsynth_internal <- function(wide, synth_data, Z, progfunc,
       c(list(wide_data = fit_wide, synth_data = fit_synth_data, Z = Z, ridge = FALSE, scm = TRUE, V = V), list(...))
     )
   } else {
-    stop("Only progfunc = 'ridge' or 'none' is implemented in metricsjl v1", call. = FALSE)
+    stop("Only progfunc = 'ridge' or 'none' is implemented in fastaugsynth v1", call. = FALSE)
   }
 
   augsynth_fit$mhat <- mhat + cbind(matrix(0, nrow = n, ncol = t0), augsynth_fit$mhat)
@@ -571,7 +571,7 @@ single_augsynth <- function(form, unit, time, t_int, data,
   time_name <- if (!is.null(.time_name)) .time_name else resolve_column_name(substitute(time), parent.frame())
 
   if (is_multi_outcome_formula(form)) {
-    stop("Multiple outcomes are not implemented in metricsjl v1", call. = FALSE)
+    stop("Multiple outcomes are not implemented in fastaugsynth v1", call. = FALSE)
   }
 
   outcome_expr <- formula_outcome_expr(form)
@@ -605,7 +605,7 @@ single_augsynth <- function(form, unit, time, t_int, data,
 augsynth <- function(form, unit, time, data, t_int = NULL, ...) {
   form <- Formula::Formula(form)
   if (is_multi_outcome_formula(form)) {
-    stop("Multiple outcomes are not implemented in metricsjl v1", call. = FALSE)
+    stop("Multiple outcomes are not implemented in fastaugsynth v1", call. = FALSE)
   }
 
   unit_name <- resolve_column_name(substitute(unit), parent.frame())
@@ -613,7 +613,7 @@ augsynth <- function(form, unit, time, data, t_int = NULL, ...) {
   trt_times <- infer_treatment_schedule(data, unit_name, time_name, formula_treatment_expr(form))
 
   if (length(trt_times) > 1L) {
-    stop("Staggered adoption / multisynth is not implemented in metricsjl v1", call. = FALSE)
+    stop("Staggered adoption / multisynth is not implemented in fastaugsynth v1", call. = FALSE)
   }
   if (is.null(t_int)) {
     t_int <- trt_times[[1]]

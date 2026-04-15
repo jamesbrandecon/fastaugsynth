@@ -66,20 +66,20 @@ jobs:
           path: backend-artifact
       - name: Unpack backend artifact
         run: |
-          mkdir -p "$HOME/.cache/metricsjl/backend"
-          tar -xzf backend-artifact/statlibbackend-linux-x86_64.tar.gz -C "$HOME/.cache/metricsjl/backend"
-          find "$HOME/.cache/metricsjl/backend" -maxdepth 3 -type f
+          mkdir -p "$HOME/.cache/fastaugsynth/backend"
+          tar -xzf backend-artifact/statlibbackend-linux-x86_64.tar.gz -C "$HOME/.cache/fastaugsynth/backend"
+          find "$HOME/.cache/fastaugsynth/backend" -maxdepth 3 -type f
       - name: Install and test R package using backend (without Julia)
         env:
-          METRICSJL_BACKEND_LIB: ${{ runner.temp }}/libpath-placeholder
+          FASTAUGSYNTH_BACKEND_LIB: ${{ runner.temp }}/libpath-placeholder
         run: |
-          LIB=$(find "$HOME/.cache/metricsjl/backend" -name 'libstatlibbackend.so' | head -n 1)
+          LIB=$(find "$HOME/.cache/fastaugsynth/backend" -name 'libstatlibbackend.so' | head -n 1)
           if [ -z "$LIB" ]; then
             echo "libstatlibbackend.so not found" >&2
             exit 1
           fi
           echo "Using backend library: $LIB"
-          export METRICSJL_BACKEND_LIB="$LIB"
-          R CMD INSTALL statlibR
-          Rscript -e 'library(metricsjl); set.seed(42); X <- cbind(1, matrix(rnorm(400), ncol = 4)); y <- X %*% c(1,2,3,4,5) + rnorm(100); fit <- jols_fit_xy(X, as.vector(y)); ref <- lm.fit(X, as.vector(y)); stopifnot(max(abs(fit$coefficients - unname(ref$coefficients))) < 1e-8)'
-          Rscript -e 'library(metricsjl); library(testthat); testthat::test_dir("statlibR/tests/testthat")'
+          export FASTAUGSYNTH_BACKEND_LIB="$LIB"
+          R CMD INSTALL .
+          Rscript -e 'library(fastaugsynth); set.seed(42); X <- cbind(1, matrix(rnorm(400), ncol = 4)); y <- X %*% c(1,2,3,4,5) + rnorm(100); fit <- jols_fit_xy(X, as.vector(y)); ref <- lm.fit(X, as.vector(y)); stopifnot(max(abs(fit$coefficients - unname(ref$coefficients))) < 1e-8)'
+          Rscript -e 'library(fastaugsynth); library(testthat); testthat::test_dir("tests/testthat")'

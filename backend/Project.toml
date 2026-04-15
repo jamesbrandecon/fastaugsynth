@@ -1,6 +1,6 @@
 name = "StatlibBackend"
 uuid = "8b0355b8-2f0a-4ef7-a422-3bf78f0d2360"
-authors = ["jlrstats contributors"]
+authors = ["fastaugsynth contributors"]
 version = "0.1.0"
 
 [deps]

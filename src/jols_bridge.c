@@ -75,11 +75,7 @@ static init_julia_fn init_julia_ptr = NULL;
 static char backend_libpath[4096] = "";
 
 static const char* configured_julia_threads(void) {
-  const char* threads = getenv("METRICSJL_JULIA_THREADS");
-  if (threads != NULL && threads[0] != '\0') {
-    return threads;
-  }
-  threads = getenv("STATLIB_JULIA_THREADS");
+  const char* threads = getenv("FASTAUGSYNTH_JULIA_THREADS");
   if (threads != NULL && threads[0] != '\0') {
     return threads;
   }
@@ -109,7 +105,7 @@ static void* load_backend(const char* libpath) {
   }
 
   {
-    char program_name[] = "metricsjl";
+    char program_name[] = "fastaugsynth";
     const char* threads = configured_julia_threads();
     if (threads != NULL) {
       char threads_arg[128];
@@ -709,7 +705,7 @@ static const R_CallMethodDef CallEntries[] = {
   {NULL, NULL, 0}
 };
 
-void R_init_metricsjl(DllInfo* dll) {
+void R_init_fastaugsynth(DllInfo* dll) {
   R_registerRoutines(dll, NULL, CallEntries, NULL, NULL);
   R_useDynamicSymbols(dll, FALSE);
 }

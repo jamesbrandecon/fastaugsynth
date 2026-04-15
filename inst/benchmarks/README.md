@@ -21,14 +21,14 @@ That makes this useful as an end-user latency comparison, not a solver-only comp
 
 ## Run It
 
-Install the source tree under `statlibR/` as package `metricsjl`, point `METRICSJL_BACKEND_LIB` at a built backend library, and run:
+Install the repo root as package `fastaugsynth`, point `FASTAUGSYNTH_BACKEND_LIB` at a built backend library, and run:
 
 ```bash
-R CMD INSTALL -l /tmp/metricsjl-lib statlibR
-R_LIBS=/tmp/metricsjl-lib \
-METRICSJL_BACKEND_LIB=/absolute/path/to/libstatlibbackend.dylib \
-Rscript statlibR/inst/benchmarks/benchmark_ols_vs_lm.R \
-  --output-dir statlibR/inst/benchmarks \
+R CMD INSTALL -l /tmp/fastaugsynth-lib .
+R_LIBS=/tmp/fastaugsynth-lib \
+FASTAUGSYNTH_BACKEND_LIB=/absolute/path/to/libstatlibbackend.dylib \
+Rscript inst/benchmarks/benchmark_ols_vs_lm.R \
+  --output-dir inst/benchmarks \
   --reps 12 \
   --batch-size 5
 ```
@@ -46,23 +46,23 @@ On Linux, swap the library filename to `libstatlibbackend.so`.
 - `figures/ols_vs_lm_bar.png`: grouped warm-runtime bar chart
 - `figures/ols_vs_lm_line.png`: warm-runtime scaling line chart
 
-## `augsynth`, `metricsjl`, and `gsynth` Benchmark
+## `augsynth`, `fastaugsynth`, and `gsynth` Benchmark
 
 This folder also supports a synthetic-control benchmark that generates its own simulated panel data and can sweep one dimension at a time (donors, pre-treatment periods, or post-treatment periods).
 
-- `metricsjl::augsynth()` (compiled backend)
+- `fastaugsynth::augsynth()` (compiled backend)
 - `augsynth::augsynth()` (reference R implementation)
 - `gsynth::gsynth()` (if available; optional)
 
 Run:
 
 ```bash
-R CMD INSTALL -l /tmp/metricsjl-lib statlibR
-R_LIBS=/tmp/metricsjl-lib \
-METRICSJL_BACKEND_LIB=/absolute/path/to/libstatlibbackend.dylib \
-Rscript statlibR/inst/benchmarks/benchmark_augsynth_vs_gsynth.R \
-  --output-dir statlibR/inst/benchmarks \
-  --figures-dir /tmp/metricsjl-bench-figs \
+R CMD INSTALL -l /tmp/fastaugsynth-lib .
+R_LIBS=/tmp/fastaugsynth-lib \
+FASTAUGSYNTH_BACKEND_LIB=/absolute/path/to/libstatlibbackend.dylib \
+Rscript inst/benchmarks/benchmark_augsynth_vs_gsynth.R \
+  --output-dir inst/benchmarks \
+  --figures-dir /tmp/fastaugsynth-bench-figs \
   --reps 20
 ```
 
@@ -77,7 +77,7 @@ install.packages("gsynth")
 ### Sweep examples
 
 ```bash
-Rscript statlibR/inst/benchmarks/benchmark_augsynth_vs_gsynth.R \
+Rscript inst/benchmarks/benchmark_augsynth_vs_gsynth.R \
   --figures-dir /tmp/bench-donors \
   --sweep donors \
   --sweep-values 10,20,40 \
@@ -87,7 +87,7 @@ Rscript statlibR/inst/benchmarks/benchmark_augsynth_vs_gsynth.R \
 ```
 
 ```bash
-Rscript statlibR/inst/benchmarks/benchmark_augsynth_vs_gsynth.R \
+Rscript inst/benchmarks/benchmark_augsynth_vs_gsynth.R \
   --figures-dir /tmp/bench-pre \
   --sweep pre \
   --sweep-values 8,12,16 \
@@ -97,7 +97,7 @@ Rscript statlibR/inst/benchmarks/benchmark_augsynth_vs_gsynth.R \
 ```
 
 ```bash
-Rscript statlibR/inst/benchmarks/benchmark_augsynth_vs_gsynth.R \
+Rscript inst/benchmarks/benchmark_augsynth_vs_gsynth.R \
   --figures-dir /tmp/bench-post \
   --sweep post \
   --sweep-values 4,8,12 \
@@ -111,7 +111,7 @@ Rscript statlibR/inst/benchmarks/benchmark_augsynth_vs_gsynth.R \
 Inference timing is included by default for `jackknife` and `conformal`.
 
 ```bash
-Rscript statlibR/inst/benchmarks/benchmark_augsynth_vs_gsynth.R \
+Rscript inst/benchmarks/benchmark_augsynth_vs_gsynth.R \
   --sweep donors \
   --sweep-values 20,40,60 \
   --inference jackknife,conformal \
@@ -123,8 +123,39 @@ Rscript statlibR/inst/benchmarks/benchmark_augsynth_vs_gsynth.R \
 - `--inference conformal`: conformal only
 - `--skip-inference`: estimation only
 
-In both cases, benchmarking uses `summary(fit, inf = TRUE, inf_type = "<mode>")` on
-`metricsjl::augsynth()` and `augsynth::augsynth()`.
+In both cases, benchmarking calls each package's own `summary.augsynth()` method
+directly on `fastaugsynth::augsynth()` and `augsynth::augsynth()` fits so the
+results are not affected by shared S3 dispatch.
+
+## README Conformal Comparison Plot
+
+Use `plot_readme_conformal_comparison.R` to generate the smaller conformal-only
+figure used in the top-level README.
+
+The script:
+
+- fits `fastaugsynth` and upstream `augsynth` on three simulated panels
+- times only direct `summary.augsynth(..., inf_type = "conformal")` calls
+- writes raw timings and medians to `results/`
+- writes a log-scale ggplot to `figures/`
+
+Run:
+
+```bash
+R CMD INSTALL -l /tmp/fastaugsynth-lib .
+R_LIBS=/tmp/fastaugsynth-lib \
+FASTAUGSYNTH_BACKEND_LIB=/absolute/path/to/libstatlibbackend.dylib \
+Rscript inst/benchmarks/plot_readme_conformal_comparison.R \
+  --output-dir inst/benchmarks/readme_conformal \
+  --figures-dir inst/benchmarks/figures \
+  --reps 1
+```
+
+Outputs:
+
+- `results/fastaugsynth_conformal_compare_timings.csv`
+- `results/fastaugsynth_conformal_compare_summary.csv`
+- `figures/fastaugsynth_conformal_compare.png`
 
 ## Factorial `augsynth` Benchmark
 
@@ -149,17 +180,17 @@ Current default grid:
 Review the exact 16 specs without running the benchmark:
 
 ```bash
-Rscript statlibR/inst/benchmarks/benchmark_augsynth_factorial.R --print-specs
+Rscript inst/benchmarks/benchmark_augsynth_factorial.R --print-specs
 ```
 
 Run the full benchmark:
 
 ```bash
-R CMD INSTALL -l /tmp/metricsjl-lib statlibR
-R_LIBS=/tmp/metricsjl-lib \
-METRICSJL_BACKEND_LIB=/absolute/path/to/libstatlibbackend.dylib \
-Rscript statlibR/inst/benchmarks/benchmark_augsynth_factorial.R \
-  --output-dir statlibR/inst/benchmarks \
+R CMD INSTALL -l /tmp/fastaugsynth-lib .
+R_LIBS=/tmp/fastaugsynth-lib \
+FASTAUGSYNTH_BACKEND_LIB=/absolute/path/to/libstatlibbackend.dylib \
+Rscript inst/benchmarks/benchmark_augsynth_factorial.R \
+  --output-dir inst/benchmarks \
   --reps 3
 ```
 
@@ -167,11 +198,11 @@ To include the patched-R benchmark clone as a third conformal method, install th
 local temp package and pass its package name:
 
 ```bash
-R CMD INSTALL -l /tmp/metricsjl-lib tmp/augsynth-upstream-fast
-R_LIBS=/tmp/metricsjl-lib \
-METRICSJL_BACKEND_LIB=/absolute/path/to/libstatlibbackend.dylib \
-Rscript statlibR/inst/benchmarks/benchmark_augsynth_factorial.R \
-  --output-dir statlibR/inst/benchmarks \
+R CMD INSTALL -l /tmp/fastaugsynth-lib tmp/augsynth-upstream-fast
+R_LIBS=/tmp/fastaugsynth-lib \
+FASTAUGSYNTH_BACKEND_LIB=/absolute/path/to/libstatlibbackend.dylib \
+Rscript inst/benchmarks/benchmark_augsynth_factorial.R \
+  --output-dir inst/benchmarks \
   --reps 3 \
   --fast-r-package augsynthfast
 ```
@@ -193,12 +224,12 @@ Outputs:
 
 ## `augsynth` Agreement Plot
 
-Use `plot_augsynth_agreement.R` to visually compare `metricsjl::augsynth()` and upstream `augsynth::augsynth()` on a small battery of simulated datasets.
+Use `plot_augsynth_agreement.R` to visually compare `fastaugsynth::augsynth()` and upstream `augsynth::augsynth()` on a small battery of simulated datasets.
 
 The script:
 
 - simulates 9 datasets with varying donor counts, pre-period counts, post-period counts, and noise levels
-- fits both `metricsjl` and upstream `augsynth`
+- fits both `fastaugsynth` and upstream `augsynth`
 - computes conformal intervals with deterministic `type = "block"` and `conformal_mode = "reference"` by default
 - writes one 3 x 3 panel figure with treated outcome, synthetic path, conformal interval, and treatment-date vline
 - writes a diagnostics CSV with max absolute differences in synthetic paths and CI bounds so any remaining inference-gap is explicit
@@ -206,17 +237,17 @@ The script:
 Review the spec table:
 
 ```bash
-Rscript statlibR/inst/benchmarks/plot_augsynth_agreement.R --print-specs
+Rscript inst/benchmarks/plot_augsynth_agreement.R --print-specs
 ```
 
 Run it:
 
 ```bash
-R CMD INSTALL -l /tmp/metricsjl-lib statlibR
-R_LIBS=/tmp/metricsjl-lib \
-METRICSJL_BACKEND_LIB=/absolute/path/to/libstatlibbackend.dylib \
-Rscript statlibR/inst/benchmarks/plot_augsynth_agreement.R \
-  --output-dir statlibR/inst/benchmarks
+R CMD INSTALL -l /tmp/fastaugsynth-lib .
+R_LIBS=/tmp/fastaugsynth-lib \
+FASTAUGSYNTH_BACKEND_LIB=/absolute/path/to/libstatlibbackend.dylib \
+Rscript inst/benchmarks/plot_augsynth_agreement.R \
+  --output-dir inst/benchmarks
 ```
 
 Outputs:
@@ -228,7 +259,7 @@ Outputs:
 ## `augsynth` vs `gsynth` Outputs
 
 - `results/augsynth_vs_gsynth_timings.csv`: per-iteration raw timings in milliseconds
-- `results/augsynth_vs_gsynth_summary.csv`: averaged summaries and speedup against `metricsjl`
+- `results/augsynth_vs_gsynth_summary.csv`: averaged summaries and speedup against `fastaugsynth`
 - `results/augsynth_vs_gsynth_speedup.csv`: warm-median speedup table
 - `results/benchmark_metadata.txt`: run metadata, package versions, and backend path
 - `figures/augsynth_vs_gsynth_<sweep>_bar.png`: grouped bar chart for selected sweep dimension

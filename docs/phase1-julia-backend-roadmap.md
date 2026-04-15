@@ -60,7 +60,7 @@ Use two repositories:
 1. **Julia backend** (`statlib-julia-backend`)
    - owns ABI and compiled runtime
    - builds/release artifacts per platform
-2. **R package** (`metricsjl`, source tree currently under `statlibR/`)
+2. **R package** (`fastaugsynth`, source tree now at the repo root)
    - user-facing R API
    - thin C bridge
    - backend download/install/load helpers

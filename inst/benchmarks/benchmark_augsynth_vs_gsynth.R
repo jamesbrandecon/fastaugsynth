@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 
 backend_env_var <- function() {
-  Sys.getenv("METRICSJL_BACKEND_LIB", Sys.getenv("STATLIB_BACKEND_LIB", ""))
+  Sys.getenv("FASTAUGSYNTH_BACKEND_LIB", "")
 }
 
 script_dir <- function() {
@@ -262,6 +262,15 @@ resolve_gsynth_fit <- function(formula, data, unit_name, time_name) {
   stop("Unable to call gsynth with any supported candidate signature.", call. = FALSE)
 }
 
+ns_fun <- function(pkg, name) {
+  get(name, envir = asNamespace(pkg))
+}
+
+summary_with_pkg <- function(pkg, fit, inf_type) {
+  summary_fun <- ns_fun(pkg, "summary.augsynth")
+  summary_fun(fit, inf = TRUE, inf_type = inf_type)
+}
+
 simulate_augsynth_dataset <- function(n_donors, pre_periods, post_periods, seed,
                                      outcome_name = "gdpcap",
                                      unit_name = "regionno",
@@ -330,18 +339,8 @@ run_scenario_benchmark <- function(scenario, scenario_id, seed, with_gsynth, rep
   unit_symbol <- as.name(unit_name)
   time_symbol <- as.name(time_name)
 
-  add_formula_inference <- function(fit_expr, inf_type) {
-    as.call(c(
-      list(quote(summary), fit_expr),
-      list(
-        inf = TRUE,
-        inf_type = inf_type
-      )
-    ))
-  }
-
-  metricsjl_fit_expr <- as.call(list(
-    quote(metricsjl::augsynth),
+  fastaugsynth_fit_expr <- as.call(list(
+    quote(fastaugsynth::augsynth),
     as.name("formula"),
     unit_symbol,
     time_symbol,
@@ -369,7 +368,7 @@ run_scenario_benchmark <- function(scenario, scenario_id, seed, with_gsynth, rep
   ))
 
   method_exprs <- list(
-    metricsjl = metricsjl_fit_expr,
+    fastaugsynth = fastaugsynth_fit_expr,
     augsynth = augsynth_fit_expr
   )
   if (with_gsynth) {
@@ -377,12 +376,12 @@ run_scenario_benchmark <- function(scenario, scenario_id, seed, with_gsynth, rep
   }
 
   if ("jackknife" %in% inference_modes) {
-    method_exprs$metricsjl_jackknife <- add_formula_inference(metricsjl_fit_expr, "jackknife")
-    method_exprs$augsynth_jackknife <- add_formula_inference(augsynth_fit_expr, "jackknife")
+    method_exprs$fastaugsynth_jackknife <- as.call(list(as.name("summary_with_pkg"), "fastaugsynth", fastaugsynth_fit_expr, "jackknife"))
+    method_exprs$augsynth_jackknife <- as.call(list(as.name("summary_with_pkg"), "augsynth", augsynth_fit_expr, "jackknife"))
   }
   if ("conformal" %in% inference_modes) {
-    method_exprs$metricsjl_conformal <- add_formula_inference(metricsjl_fit_expr, "conformal")
-    method_exprs$augsynth_conformal <- add_formula_inference(augsynth_fit_expr, "conformal")
+    method_exprs$fastaugsynth_conformal <- as.call(list(as.name("summary_with_pkg"), "fastaugsynth", fastaugsynth_fit_expr, "conformal"))
+    method_exprs$augsynth_conformal <- as.call(list(as.name("summary_with_pkg"), "augsynth", augsynth_fit_expr, "conformal"))
   }
 
   mark <- do.call(
@@ -398,7 +397,7 @@ run_scenario_benchmark <- function(scenario, scenario_id, seed, with_gsynth, rep
   )
 
   method_to_phase <- function(method) {
-    if (method == "metricsjl" || method == "augsynth" || method == "gsynth") {
+    if (method == "fastaugsynth" || method == "augsynth" || method == "gsynth") {
       return("estimate")
     }
     if (grepl("_jackknife$", method)) {
@@ -439,12 +438,12 @@ run_scenario_benchmark <- function(scenario, scenario_id, seed, with_gsynth, rep
     FUN = mean
   )
   warm_summary <- warm_summary[order(warm_summary$scenario, warm_summary$phase, warm_summary$median_ms), ]
-  warm_summary$median_ms_over_metricsjl <- NA_real_
-  warm_summary$itr_per_sec_vs_metricsjl <- NA_real_
+  warm_summary$median_ms_over_fastaugsynth <- NA_real_
+  warm_summary$itr_per_sec_vs_fastaugsynth <- NA_real_
   phase_base <- list(
-    estimate = "metricsjl",
-    jackknife = "metricsjl_jackknife",
-    conformal = "metricsjl_conformal"
+    estimate = "fastaugsynth",
+    jackknife = "fastaugsynth_jackknife",
+    conformal = "fastaugsynth_conformal"
   )
 
   for (scenario_idx in unique(warm_summary$scenario)) {
@@ -463,8 +462,8 @@ run_scenario_benchmark <- function(scenario, scenario_id, seed, with_gsynth, rep
       base <- warm_summary$median_ms[base_rows][[1]]
       base_itr <- warm_summary$itr_per_sec[base_rows][[1]]
       row_idx <- warm_summary$scenario == scenario_idx & warm_summary$phase == phase_idx
-      warm_summary$median_ms_over_metricsjl[row_idx] <- warm_summary$median_ms[row_idx] / base
-      warm_summary$itr_per_sec_vs_metricsjl[row_idx] <- warm_summary$itr_per_sec[row_idx] / base_itr
+      warm_summary$median_ms_over_fastaugsynth[row_idx] <- warm_summary$median_ms[row_idx] / base
+      warm_summary$itr_per_sec_vs_fastaugsynth[row_idx] <- warm_summary$itr_per_sec[row_idx] / base_itr
     }
   }
 
@@ -482,8 +481,8 @@ run_benchmark <- function(sweep = "donors", sweep_values = NULL, reps = 20L, see
   if (!requireNamespace("bench", quietly = TRUE)) {
     stop("Package 'bench' is required to run benchmark.", call. = FALSE)
   }
-  if (!requireNamespace("metricsjl", quietly = TRUE)) {
-    stop("Package 'metricsjl' must be installed before running this benchmark.", call. = FALSE)
+  if (!requireNamespace("fastaugsynth", quietly = TRUE)) {
+    stop("Package 'fastaugsynth' must be installed before running this benchmark.", call. = FALSE)
   }
   if (!requireNamespace("augsynth", quietly = TRUE)) {
     stop("Package 'augsynth' must be installed before running this benchmark.", call. = FALSE)
@@ -538,71 +537,102 @@ run_benchmark <- function(sweep = "donors", sweep_values = NULL, reps = 20L, see
 
 plot_bars_by_sweep <- function(summary, methods, sweep, output_dir) {
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
-  method_colors <- c(
-    metricsjl = "#1b9e77",
+  if (!requireNamespace("ggplot2", quietly = TRUE)) {
+    stop("Package 'ggplot2' is required to draw benchmark figures.", call. = FALSE)
+  }
+  package_colors <- c(
+    fastaugsynth = "#1b9e77",
     augsynth = "#d95f02",
-    gsynth = "#7570b3",
-    metricsjl_jackknife = "#66c2a5",
-    augsynth_jackknife = "#fc8d62",
-    metricsjl_conformal = "#8da0cb",
-    augsynth_conformal = "#e78ac3"
+    gsynth = "#7570b3"
   )
-  method_order <- intersect(
-    methods,
-    c(
-      "metricsjl",
-      "augsynth",
-      "gsynth",
-      "metricsjl_jackknife",
-      "augsynth_jackknife",
-      "metricsjl_conformal",
-      "augsynth_conformal"
-    )
+  phase_labels <- c(
+    estimate = "Fit",
+    jackknife = "Jackknife",
+    conformal = "Conformal"
   )
+  package_labels <- c(
+    fastaugsynth = "fastaugsynth",
+    augsynth = "augsynth",
+    gsynth = "gsynth"
+  )
+  phase_order <- intersect(c("estimate", "jackknife", "conformal"), unique(as.character(summary$phase)))
+  package_order <- c("fastaugsynth", "augsynth", "gsynth")
+
+  phase_of_method <- function(method) {
+    if (method %in% c("fastaugsynth", "augsynth", "gsynth")) {
+      return("estimate")
+    }
+    if (grepl("_jackknife$", method)) {
+      return("jackknife")
+    }
+    if (grepl("_conformal$", method)) {
+      return("conformal")
+    }
+    "other"
+  }
+
+  package_of_method <- function(method) {
+    if (grepl("^fastaugsynth", method)) {
+      return("fastaugsynth")
+    }
+    if (grepl("^augsynth", method)) {
+      return("augsynth")
+    }
+    if (grepl("^gsynth", method)) {
+      return("gsynth")
+    }
+    "other"
+  }
+
+  method_info <- data.frame(
+    method = methods,
+    package = vapply(methods, package_of_method, character(1)),
+    stringsAsFactors = FALSE
+  )
+  method_info <- method_info[method_info$package %in% package_order, , drop = FALSE]
+  method_info <- method_info[order(match(method_info$package, package_order)), , drop = FALSE]
   warm <- summary
   label <- if (sweep == "donors") "donors" else if (sweep == "pre") "pre periods" else "post periods"
-  x_vals <- sort(unique(warm$sweep_value))
-  x <- vapply(x_vals, as.character, character(1))
-
-  bar_matrix <- do.call(rbind, lapply(method_order, function(method) {
-    vapply(
-      x_vals,
-      function(v) {
-        idx <- warm$method == method & warm$sweep_value == v
-        warm$median_ms[idx][1L]
-      },
-      numeric(1)
-    )
-  }))
-  rownames(bar_matrix) <- method_order
-  colnames(bar_matrix) <- x
+  plot_df <- merge(warm, method_info, by = "method", all.x = FALSE, all.y = FALSE)
+  plot_df$phase <- as.character(plot_df$phase)
+  plot_df$package <- as.character(plot_df$package)
+  plot_df$phase_label <- factor(
+    unname(phase_labels[plot_df$phase]),
+    levels = unname(phase_labels[phase_order])
+  )
+  plot_df$package_label <- factor(
+    unname(package_labels[plot_df$package]),
+    levels = unname(package_labels[intersect(package_order, unique(plot_df$package))])
+  )
+  plot_df$sweep_label <- factor(as.character(plot_df$sweep_value), levels = as.character(sort(unique(plot_df$sweep_value))))
 
   bar_path <- file.path(output_dir, sprintf("augsynth_vs_gsynth_%s_bar.png", sweep))
-  png(bar_path, width = 1400, height = 900, res = 160)
-  old_par <- par(no.readonly = TRUE)
-  on.exit({
-    par(old_par)
-    dev.off()
-  }, add = TRUE)
-
-  par(mar = c(6, 5, 4, 1) + 0.1)
-  barplot(
-    bar_matrix,
-    beside = TRUE,
-    col = method_colors[method_order],
-    ylab = "Median elapsed per call (ms)",
-    main = sprintf("Augsynth timing sweep: %s", label),
-    xlab = label,
-    las = 2
-  )
-  legend(
-    "topleft",
-    legend = rownames(bar_matrix),
-    fill = method_colors[method_order],
-    bty = "n"
-  )
-  dev.off()
-  on.exit(NULL, add = FALSE)
+  plot_obj <- ggplot2::ggplot(
+    plot_df,
+    ggplot2::aes(x = sweep_label, y = median_ms, fill = package_label)
+  ) +
+    ggplot2::geom_col(
+      position = ggplot2::position_dodge(width = 0.72),
+      width = 0.62
+    ) +
+    ggplot2::facet_wrap(~phase_label, nrow = 1, scales = "free_y") +
+    ggplot2::scale_fill_manual(values = package_colors[intersect(package_order, unique(plot_df$package))], name = "Package") +
+    ggplot2::labs(
+      title = sprintf("Augsynth timing sweep: %s", label),
+      x = label,
+      y = "Median elapsed per call (ms)"
+    ) +
+    ggplot2::theme_minimal(base_size = 14) +
+    ggplot2::theme(
+      legend.position = "right",
+      legend.box = "vertical",
+      panel.grid.major.x = ggplot2::element_blank(),
+      strip.text = ggplot2::element_text(face = "bold"),
+      strip.background = ggplot2::element_rect(fill = "#eef2f7", colour = NA),
+      plot.title = ggplot2::element_text(face = "bold"),
+      axis.text.x = ggplot2::element_text(angle = 90, vjust = 0.5, hjust = 1)
+    )
+  ggplot2::ggsave(bar_path, plot_obj, width = 11, height = 6.5, dpi = 180)
 
   c(bar = bar_path)
 }
@@ -622,7 +652,7 @@ write_metadata <- function(output_dir, backend_lib, reps, seed, sweep, sweep_val
     sprintf("with_gsynth: %s", as.character(with_gsynth)),
     sprintf("R.version: %s", R.version.string),
     sprintf("platform: %s", R.version$platform),
-    sprintf("metricsjl.version: %s", as.character(utils::packageVersion("metricsjl"))),
+    sprintf("fastaugsynth.version: %s", as.character(utils::packageVersion("fastaugsynth"))),
     sprintf("augsynth.version: %s", as.character(utils::packageVersion("augsynth"))),
     if (isTRUE(with_gsynth)) sprintf("gsynth.version: %s", as.character(utils::packageVersion("gsynth"))) else "gsynth.version: not run"
   )
@@ -659,7 +689,7 @@ run_augsynth_vs_gsynth <- function(output_dir = script_dir(),
                                    post_periods = 10L) {
   if (!nzchar(backend_lib)) {
     stop(
-      "Set METRICSJL_BACKEND_LIB or pass --backend-lib so augsynth() can find the compiled backend library.",
+      "Set FASTAUGSYNTH_BACKEND_LIB or pass --backend-lib so augsynth() can find the compiled backend library.",
       call = FALSE
     )
   }
@@ -667,7 +697,7 @@ run_augsynth_vs_gsynth <- function(output_dir = script_dir(),
     stop("Package 'stats' must be available before running the benchmark.", call. = FALSE)
   }
 
-  Sys.setenv(METRICSJL_BACKEND_LIB = backend_lib)
+  Sys.setenv(FASTAUGSYNTH_BACKEND_LIB = backend_lib)
 
   output_dir <- normalizePath(output_dir, mustWork = FALSE)
   figures_dir <- if (nzchar(figures_dir %||% "")) {
@@ -702,8 +732,8 @@ run_augsynth_vs_gsynth <- function(output_dir = script_dir(),
       "phase",
       "method",
       "median_ms",
-      "median_ms_over_metricsjl",
-      "itr_per_sec_vs_metricsjl",
+      "median_ms_over_fastaugsynth",
+      "itr_per_sec_vs_fastaugsynth",
       "mem_alloc_mb"
     )],
     file.path(results_dir, "augsynth_vs_gsynth_speedup.csv"),

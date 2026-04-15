@@ -1,7 +1,8 @@
 /backend/Manifest.toml
 /backend/build/artifacts/
 /backend/build/dist/
-/statlibR/src/*.o
-/statlibR/src/*.so
+/src/*.o
+/src/*.so
+/statlibR/
 /tmp/augsynth-upstream/
 /tmp/augsynth-upstream-fast/

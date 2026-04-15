@@ -1,0 +1,21 @@
+Package: fastaugsynth
+Type: Package
+Title: Fast augsynth-Compatible Routines Backed by Julia
+Version: 0.1.0
+Authors@R: person("fastaugsynth", "contributors", email = "noreply@example.com", role = c("aut", "cre"))
+Description: Experimental R interface for fast augsynth-compatible estimation
+    and inference backed by a compiled Julia runtime.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Imports:
+    Formula,
+    curl,
+    gitcreds,
+    jsonlite,
+    stats
+Suggests:
+    fixest,
+    Synth,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3

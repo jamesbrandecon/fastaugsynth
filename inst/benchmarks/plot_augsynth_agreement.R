@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
 
-# Visual comparison for metricsjl::augsynth() vs upstream augsynth::augsynth().
+# Visual comparison for fastaugsynth::augsynth() vs upstream augsynth::augsynth().
 # Produces a 3 x 3 panel of classic synthetic-control plots:
 # - treated outcome
 # - synthetic control path from both implementations
@@ -8,7 +8,7 @@
 # - treatment-date vertical line
 
 backend_env_var <- function() {
-  Sys.getenv("METRICSJL_BACKEND_LIB", Sys.getenv("STATLIB_BACKEND_LIB", ""))
+  Sys.getenv("FASTAUGSYNTH_BACKEND_LIB", "")
 }
 
 script_dir <- function() {
@@ -105,12 +105,12 @@ parse_cli_args <- function(args) {
 ensure_runtime_deps <- function(cfg) {
   if (!nzchar(cfg$backend_lib) || !file.exists(cfg$backend_lib)) {
     stop(
-      "Set METRICSJL_BACKEND_LIB or pass --backend-lib so metricsjl can find the compiled backend library.",
+      "Set FASTAUGSYNTH_BACKEND_LIB or pass --backend-lib so fastaugsynth can find the compiled backend library.",
       call. = FALSE
     )
   }
-  if (!requireNamespace("metricsjl", quietly = TRUE)) {
-    stop("Package 'metricsjl' must be installed before running this script.", call. = FALSE)
+  if (!requireNamespace("fastaugsynth", quietly = TRUE)) {
+    stop("Package 'fastaugsynth' must be installed before running this script.", call. = FALSE)
   }
   if (!requireNamespace("augsynth", quietly = TRUE)) {
     stop("Package 'augsynth' must be installed before running this script.", call. = FALSE)
@@ -194,7 +194,7 @@ summary_with_pkg <- function(pkg, fit, cfg) {
     grid_size = cfg$conformal_grid_size,
     q = 1
   )
-  if (identical(pkg, "metricsjl")) {
+  if (identical(pkg, "fastaugsynth")) {
     args$conformal_mode <- cfg$conformal_mode
   }
   do.call(summary_fun, args)
@@ -209,16 +209,16 @@ build_panel_data <- function(spec, cfg, spec_id) {
   dataset <- simulate_panel(spec, seed = cfg$seed + spec_id)
   formula <- as.formula(sprintf("%s ~ trt", dataset$outcome))
 
-  fit_metrics <- fit_with_pkg("metricsjl", formula, dataset$unit, dataset$time, dataset$data, dataset$t_int)
+  fit_metrics <- fit_with_pkg("fastaugsynth", formula, dataset$unit, dataset$time, dataset$data, dataset$t_int)
   fit_upstream <- fit_with_pkg("augsynth", formula, dataset$unit, dataset$time, dataset$data, dataset$t_int)
 
-  sum_metrics <- summary_with_pkg("metricsjl", fit_metrics, cfg)
+  sum_metrics <- summary_with_pkg("fastaugsynth", fit_metrics, cfg)
   sum_upstream <- summary_with_pkg("augsynth", fit_upstream, cfg)
 
   treated_rows <- dataset$data[[dataset$unit]] == dataset$treated_unit
   treated_actual <- dataset$data[treated_rows, dataset$outcome]
   time_values <- dataset$data[treated_rows, dataset$time]
-  cf_metrics <- predict_cf_with_pkg("metricsjl", fit_metrics)
+  cf_metrics <- predict_cf_with_pkg("fastaugsynth", fit_metrics)
   cf_upstream <- predict_cf_with_pkg("augsynth", fit_upstream)
 
   t0 <- spec$pre_periods
@@ -335,9 +335,9 @@ draw_panel <- function(panel_data, show_legend = FALSE) {
       "bottomleft",
       legend = c(
         "Treated outcome",
-        "metricsjl synth",
+        "fastaugsynth synth",
         "augsynth synth",
-        "metricsjl CI",
+        "fastaugsynth CI",
         "augsynth CI bounds",
         "Treatment date"
       ),
@@ -354,7 +354,7 @@ draw_panel <- function(panel_data, show_legend = FALSE) {
 
 run_agreement_plot <- function(cfg) {
   ensure_runtime_deps(cfg)
-  Sys.setenv(METRICSJL_BACKEND_LIB = cfg$backend_lib)
+  Sys.setenv(FASTAUGSYNTH_BACKEND_LIB = cfg$backend_lib)
 
   specs <- cfg$specs
   panels <- vector("list", nrow(specs))
@@ -386,7 +386,7 @@ run_agreement_plot <- function(cfg) {
   }
   mtext(
     sprintf(
-      "Augsynth agreement check (%s conformal CI): metricsjl vs upstream augsynth",
+      "Augsynth agreement check (%s conformal CI): fastaugsynth vs upstream augsynth",
       paste(cfg$conformal_type, cfg$conformal_mode)
     ),
     side = 3,

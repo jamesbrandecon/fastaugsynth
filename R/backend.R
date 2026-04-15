@@ -1,9 +1,9 @@
 backend_env_var <- function() {
-  Sys.getenv("METRICSJL_BACKEND_LIB", Sys.getenv("STATLIB_BACKEND_LIB", ""))
+  Sys.getenv("FASTAUGSYNTH_BACKEND_LIB", "")
 }
 
 backend_desc <- function() {
-  tryCatch(utils::packageDescription("metricsjl"), error = function(e) NULL)
+  tryCatch(utils::packageDescription("fastaugsynth"), error = function(e) NULL)
 }
 
 backend_desc_field <- function(desc, field) {
@@ -20,10 +20,7 @@ backend_desc_field <- function(desc, field) {
 }
 
 backend_cache_roots <- function() {
-  c(
-    file.path(path.expand("~"), ".cache", "metricsjl", "backend"),
-    file.path(path.expand("~"), ".cache", "statlibR", "backend")
-  )
+  file.path(path.expand("~"), ".cache", "fastaugsynth", "backend")
 }
 
 backend_cache_root <- function() {
@@ -71,7 +68,7 @@ backend_status <- function() {
 }
 
 backend_repo <- function() {
-  override <- Sys.getenv("METRICSJL_BACKEND_REPO", "")
+  override <- Sys.getenv("FASTAUGSYNTH_BACKEND_REPO", "")
   if (nzchar(override)) return(override)
 
   desc <- backend_desc()
@@ -81,7 +78,7 @@ backend_repo <- function() {
     return(paste(username, repo, sep = "/"))
   }
 
-  "jamesbrandecon/jlrstats"
+  "jamesbrandecon/fastaugsynth"
 }
 
 normalize_backend_ref <- function(ref) {
@@ -94,7 +91,7 @@ is_commit_ref <- function(ref) {
 }
 
 backend_ref <- function() {
-  override <- Sys.getenv("METRICSJL_BACKEND_REF", "")
+  override <- Sys.getenv("FASTAUGSYNTH_BACKEND_REF", "")
   if (nzchar(override)) return(normalize_backend_ref(override))
 
   desc <- backend_desc()
@@ -107,7 +104,7 @@ backend_ref <- function() {
 }
 
 backend_sha <- function() {
-  override <- Sys.getenv("METRICSJL_BACKEND_SHA", "")
+  override <- Sys.getenv("FASTAUGSYNTH_BACKEND_SHA", "")
   if (nzchar(override)) return(tolower(override))
 
   desc <- backend_desc()
@@ -161,7 +158,7 @@ gh_api_request <- function(url,
   }
   args <- c(args, "-H", "X-GitHub-Api-Version:2022-11-28", endpoint)
 
-  stderr_file <- tempfile("metricsjl-gh-stderr-")
+  stderr_file <- tempfile("fastaugsynth-gh-stderr-")
   on.exit(unlink(stderr_file, force = TRUE), add = TRUE)
 
   status <- suppressWarnings(system2(
@@ -195,7 +192,7 @@ gh_api_request <- function(url,
 }
 
 backend_token <- function() {
-  token <- Sys.getenv("METRICSJL_GITHUB_PAT", Sys.getenv("GITHUB_PAT", ""))
+  token <- Sys.getenv("FASTAUGSYNTH_GITHUB_PAT", Sys.getenv("GITHUB_PAT", ""))
   if (nzchar(token)) {
     return(token)
   }
@@ -245,7 +242,7 @@ github_headers <- function(token = "", accept = "application/vnd.github+json") {
   headers <- c(
     Accept = accept,
     "X-GitHub-Api-Version" = "2022-11-28",
-    "User-Agent" = "metricsjl/0.1.0"
+    "User-Agent" = "fastaugsynth/0.1.0"
   )
   if (nzchar(token)) {
     headers <- c(headers, Authorization = paste("Bearer", token))
@@ -280,7 +277,7 @@ github_fetch_json <- function(url, token = "") {
     if (response$status_code == 404L) {
       message <- paste(
         message,
-        "If this repo is private, make sure GITHUB_PAT or METRICSJL_GITHUB_PAT has repo access.",
+        "If this repo is private, make sure GITHUB_PAT or FASTAUGSYNTH_GITHUB_PAT has repo access.",
         sep = " "
       )
     }
@@ -316,8 +313,8 @@ github_download_file <- function(url, destfile, token = "", accept = "applicatio
 backend_install_message <- function() {
   paste(
     "Backend library is not installed.",
-    "Run metricsjl::backend_install() explicitly or set METRICSJL_BACKEND_LIB.",
-    "For this private repo, ensure GITHUB_PAT or METRICSJL_GITHUB_PAT has repo access,",
+    "Run fastaugsynth::backend_install() explicitly or set FASTAUGSYNTH_BACKEND_LIB.",
+    "For this private repo, ensure GITHUB_PAT or FASTAUGSYNTH_GITHUB_PAT has repo access,",
     "or log in with gh auth/login, or store a GitHub token with gitcreds::gitcreds_set().",
     sep = " "
   )
@@ -406,7 +403,7 @@ backend_install <- function(repo = backend_repo(),
 
   artifact <- artifact_rows[1, , drop = FALSE]
   zipfile <- tempfile(fileext = ".zip")
-  unpack_dir <- tempfile("metricsjl-artifact-")
+  unpack_dir <- tempfile("fastaugsynth-artifact-")
   on.exit(unlink(c(zipfile, unpack_dir), recursive = TRUE, force = TRUE), add = TRUE)
   dir.create(unpack_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -443,7 +440,7 @@ ensure_backend_available <- function() {
     return(p)
   }
 
-  auto_install <- tolower(Sys.getenv("METRICSJL_AUTO_INSTALL_BACKEND", "true"))
+  auto_install <- tolower(Sys.getenv("FASTAUGSYNTH_AUTO_INSTALL_BACKEND", "true"))
   if (auto_install %in% c("1", "true", "yes")) {
     try(backend_install(quiet = TRUE), silent = TRUE)
     p <- backend_path()

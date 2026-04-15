@@ -7,7 +7,7 @@
 # - outputs are plain CSV files plus simple base-R bar charts
 
 backend_env_var <- function() {
-  Sys.getenv("METRICSJL_BACKEND_LIB", Sys.getenv("STATLIB_BACKEND_LIB", ""))
+  Sys.getenv("FASTAUGSYNTH_BACKEND_LIB", "")
 }
 
 script_dir <- function() {
@@ -265,22 +265,22 @@ benchmark_phase <- function(spec, dataset, cfg, phase) {
   }
 
   timed_estimate <- phase %in% c("estimate", "all")
-  estimate_metrics <- time_or_fit("metricsjl", "fit", timed_estimate)
+  estimate_metrics <- time_or_fit("fastaugsynth", "fit", timed_estimate)
   estimate_upstream <- time_or_fit("augsynth", "fit", timed_estimate)
 
   metrics_fit <- estimate_metrics$result
   upstream_fit <- estimate_upstream$result
 
   t0 <- ncol(metrics_fit$data$X)
-  post_idx <- seq.int(t0 + 1L, length(predict_att_with_pkg("metricsjl", metrics_fit)))
+  post_idx <- seq.int(t0 + 1L, length(predict_att_with_pkg("fastaugsynth", metrics_fit)))
   estimate_gap <- max(abs(
-    predict_att_with_pkg("metricsjl", metrics_fit)[post_idx] -
+    predict_att_with_pkg("fastaugsynth", metrics_fit)[post_idx] -
       predict_att_with_pkg("augsynth", upstream_fit)[post_idx]
   ))
 
   phase_times <- list(
     estimate = list(
-      metricsjl = estimate_metrics$times_ms,
+      fastaugsynth = estimate_metrics$times_ms,
       augsynth = estimate_upstream$times_ms
     )
   )
@@ -300,12 +300,12 @@ benchmark_phase <- function(spec, dataset, cfg, phase) {
   )
 
   if (phase %in% c("jackknife", "all")) {
-    progress_log("%s jackknife: metricsjl", progress_prefix)
+    progress_log("%s jackknife: fastaugsynth", progress_prefix)
     jack_metrics <- time_repeated(
-      function() summary_with_pkg("metricsjl", metrics_fit, "jackknife", cfg),
+      function() summary_with_pkg("fastaugsynth", metrics_fit, "jackknife", cfg),
       cfg$reps
     )
-    progress_log("%s jackknife done: metricsjl median %.2f ms", progress_prefix, median(jack_metrics$times_ms))
+    progress_log("%s jackknife done: fastaugsynth median %.2f ms", progress_prefix, median(jack_metrics$times_ms))
     progress_log("%s jackknife: augsynth", progress_prefix)
     jack_upstream <- time_repeated(
       function() summary_with_pkg("augsynth", upstream_fit, "jackknife", cfg),
@@ -313,7 +313,7 @@ benchmark_phase <- function(spec, dataset, cfg, phase) {
     )
     progress_log("%s jackknife done: augsynth median %.2f ms", progress_prefix, median(jack_upstream$times_ms))
     phase_times$jackknife <- list(
-      metricsjl = jack_metrics$times_ms,
+      fastaugsynth = jack_metrics$times_ms,
       augsynth = jack_upstream$times_ms
     )
   }
@@ -323,12 +323,12 @@ benchmark_phase <- function(spec, dataset, cfg, phase) {
     if (nzchar(fast_r_package)) {
       fast_r_fit <- time_or_fit(fast_r_package, "fit", FALSE)$result
     }
-    progress_log("%s conformal: metricsjl", progress_prefix)
+    progress_log("%s conformal: fastaugsynth", progress_prefix)
     conformal_metrics <- time_repeated(
-      function() summary_with_pkg("metricsjl", metrics_fit, "conformal", cfg),
+      function() summary_with_pkg("fastaugsynth", metrics_fit, "conformal", cfg),
       cfg$reps
     )
-    progress_log("%s conformal done: metricsjl median %.2f ms", progress_prefix, median(conformal_metrics$times_ms))
+    progress_log("%s conformal done: fastaugsynth median %.2f ms", progress_prefix, median(conformal_metrics$times_ms))
     progress_log("%s conformal: augsynth", progress_prefix)
     conformal_upstream <- time_repeated(
       function() summary_with_pkg("augsynth", upstream_fit, "conformal", cfg),
@@ -336,7 +336,7 @@ benchmark_phase <- function(spec, dataset, cfg, phase) {
     )
     progress_log("%s conformal done: augsynth median %.2f ms", progress_prefix, median(conformal_upstream$times_ms))
     phase_times$conformal <- list(
-      metricsjl = conformal_metrics$times_ms,
+      fastaugsynth = conformal_metrics$times_ms,
       augsynth = conformal_upstream$times_ms
     )
     if (nzchar(fast_r_package)) {
@@ -406,18 +406,18 @@ summarize_timings <- function(timings) {
   rownames(out) <- NULL
   out <- out[order(out$phase, out$spec_id, out$method), ]
 
-  out$speedup_vs_metricsjl <- NA_real_
+  out$speedup_vs_fastaugsynth <- NA_real_
   for (phase_name in unique(out$phase)) {
     phase_rows <- out$phase == phase_name
     phase_df <- out[phase_rows, ]
     for (spec_id in unique(phase_df$spec_id)) {
       spec_rows <- phase_rows & out$spec_id == spec_id
-      base_rows <- spec_rows & out$method == "metricsjl"
+      base_rows <- spec_rows & out$method == "fastaugsynth"
       if (!any(base_rows)) {
         next
       }
       base_time <- out$median_ms[base_rows][[1]]
-      out$speedup_vs_metricsjl[spec_rows] <- out$median_ms[spec_rows] / base_time
+      out$speedup_vs_fastaugsynth[spec_rows] <- out$median_ms[spec_rows] / base_time
     }
   }
 
@@ -430,7 +430,7 @@ plot_phase_bars <- function(summary, phase_name, output_path) {
     return(invisible(NULL))
   }
 
-  method_priority <- c("metricsjl", "augsynth", "augsynthfast")
+  method_priority <- c("fastaugsynth", "augsynth", "augsynthfast")
   methods <- unique(phase_df$method)
   methods <- c(
     method_priority[method_priority %in% methods],
@@ -456,7 +456,7 @@ plot_phase_bars <- function(summary, phase_name, output_path) {
   )
 
   fill_colors <- c(
-    metricsjl = "#1b9e77",
+    fastaugsynth = "#1b9e77",
     augsynth = "#d95f02",
     augsynthfast = "#7570b3"
   )
@@ -509,12 +509,12 @@ plot_phase_bars <- function(summary, phase_name, output_path) {
 ensure_runtime_deps <- function(cfg) {
   if (!nzchar(cfg$backend_lib) || !file.exists(cfg$backend_lib)) {
     stop(
-      "Set METRICSJL_BACKEND_LIB or pass --backend-lib so metricsjl can find the compiled backend library.",
+      "Set FASTAUGSYNTH_BACKEND_LIB or pass --backend-lib so fastaugsynth can find the compiled backend library.",
       call. = FALSE
     )
   }
-  if (!requireNamespace("metricsjl", quietly = TRUE)) {
-    stop("Package 'metricsjl' must be installed before running this benchmark.", call. = FALSE)
+  if (!requireNamespace("fastaugsynth", quietly = TRUE)) {
+    stop("Package 'fastaugsynth' must be installed before running this benchmark.", call. = FALSE)
   }
   if (!requireNamespace("augsynth", quietly = TRUE)) {
     stop("Package 'augsynth' must be installed before running this benchmark.", call. = FALSE)
@@ -533,7 +533,7 @@ ensure_runtime_deps <- function(cfg) {
 
 run_factorial_benchmark <- function(cfg) {
   ensure_runtime_deps(cfg)
-  Sys.setenv(METRICSJL_BACKEND_LIB = cfg$backend_lib)
+  Sys.setenv(FASTAUGSYNTH_BACKEND_LIB = cfg$backend_lib)
 
   specs <- build_spec_grid(cfg)
   timings <- list()

@@ -10,12 +10,12 @@ default_scenarios <- function() {
 }
 
 backend_env_var <- function() {
-  Sys.getenv("METRICSJL_BACKEND_LIB", Sys.getenv("STATLIB_BACKEND_LIB", ""))
+  Sys.getenv("FASTAUGSYNTH_BACKEND_LIB", "")
 }
 
 benchmark_method_catalog <- function() {
   list(
-    jols_fit_xy = list(label = "metricsjl::jols_fit_xy()", color = "#1b9e77", pch = 16),
+    jols_fit_xy = list(label = "fastaugsynth::jols_fit_xy()", color = "#1b9e77", pch = 16),
     lm = list(label = "stats::lm()", color = "#d95f02", pch = 17),
     feols = list(label = "fixest::feols()", color = "#7570b3", pch = 15)
   )
@@ -80,7 +80,7 @@ build_case <- function(n, p, seed) {
 case_methods <- function(case) {
   list(
     jols_fit_xy = list(
-      fit = function() metricsjl::jols_fit_xy(case$x, case$y),
+      fit = function() fastaugsynth::jols_fit_xy(case$x, case$y),
       coef = function(value) unname(value$coefficients)
     ),
     lm = list(
@@ -338,7 +338,7 @@ write_metadata <- function(output_dir, backend_lib, reps, batch_size) {
     sprintf("batch_size: %d", batch_size),
     sprintf("R.version: %s", R.version.string),
     sprintf("platform: %s", R.version$platform),
-    sprintf("metricsjl.version: %s", as.character(utils::packageVersion("metricsjl"))),
+    sprintf("fastaugsynth.version: %s", as.character(utils::packageVersion("fastaugsynth"))),
     sprintf("fixest.version: %s", as.character(utils::packageVersion("fixest")))
   )
   writeLines(lines, meta_path)
@@ -353,19 +353,19 @@ run_ols_vs_lm_benchmarks <- function(output_dir = script_dir(),
                                      tolerance = 1e-8) {
   if (!nzchar(backend_lib)) {
     stop(
-      "Set METRICSJL_BACKEND_LIB or pass backend_lib so jols_fit_xy() can find the compiled backend library.",
+      "Set FASTAUGSYNTH_BACKEND_LIB or pass backend_lib so jols_fit_xy() can find the compiled backend library.",
       call. = FALSE
     )
   }
 
-  if (!requireNamespace("metricsjl", quietly = TRUE)) {
-    stop("Package 'metricsjl' must be installed before running the benchmark.", call. = FALSE)
+  if (!requireNamespace("fastaugsynth", quietly = TRUE)) {
+    stop("Package 'fastaugsynth' must be installed before running the benchmark.", call. = FALSE)
   }
   if (!requireNamespace("fixest", quietly = TRUE)) {
     stop("Package 'fixest' must be installed before running the benchmark.", call. = FALSE)
   }
 
-  Sys.setenv(METRICSJL_BACKEND_LIB = backend_lib)
+  Sys.setenv(FASTAUGSYNTH_BACKEND_LIB = backend_lib)
 
   scenarios <- default_scenarios()
   results <- do.call(rbind, lapply(seq_len(nrow(scenarios)), function(idx) {

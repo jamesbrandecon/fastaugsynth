@@ -1,5 +1,5 @@
 .onLoad <- function(libname, pkgname) {
-  auto_install <- tolower(Sys.getenv("METRICSJL_AUTO_INSTALL_BACKEND", "true"))
+  auto_install <- tolower(Sys.getenv("FASTAUGSYNTH_AUTO_INSTALL_BACKEND", "true"))
   if (!(auto_install %in% c("1", "true", "yes"))) {
     return(invisible(NULL))
   }
