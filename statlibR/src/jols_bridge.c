@@ -57,6 +57,8 @@ typedef int (*augsynth_inference_fn)(int, int, int,
                                       int, int, const double*,
                                       int, int, char*, int);
 
+typedef int (*backend_thread_count_fn)(void);
+
 typedef void (*init_julia_fn)(int, char**);
 
 static void* backend_handle = NULL;
@@ -68,8 +70,25 @@ static jackknife_plus_fn jackknife_plus_ptr = NULL;
 static jackknife_unit_std_fn jackknife_unit_std_ptr = NULL;
 static conformal_inference_fn conformal_inference_ptr = NULL;
 static augsynth_inference_fn augsynth_inference_ptr = NULL;
+static backend_thread_count_fn backend_thread_count_ptr = NULL;
 static init_julia_fn init_julia_ptr = NULL;
 static char backend_libpath[4096] = "";
+
+static const char* configured_julia_threads(void) {
+  const char* threads = getenv("METRICSJL_JULIA_THREADS");
+  if (threads != NULL && threads[0] != '\0') {
+    return threads;
+  }
+  threads = getenv("STATLIB_JULIA_THREADS");
+  if (threads != NULL && threads[0] != '\0') {
+    return threads;
+  }
+  threads = getenv("JULIA_NUM_THREADS");
+  if (threads != NULL && threads[0] != '\0') {
+    return threads;
+  }
+  return NULL;
+}
 
 static void* load_backend(const char* libpath) {
   if (backend_handle != NULL) {
@@ -90,12 +109,39 @@ static void* load_backend(const char* libpath) {
   }
 
   {
-    char* julia_argv[] = {"metricsjl", NULL};
-    init_julia_ptr(1, julia_argv);
+    char program_name[] = "metricsjl";
+    const char* threads = configured_julia_threads();
+    if (threads != NULL) {
+      char threads_arg[128];
+      snprintf(threads_arg, sizeof(threads_arg), "--threads=%s", threads);
+      char* julia_argv[] = {program_name, threads_arg, NULL};
+      init_julia_ptr(2, julia_argv);
+    } else {
+      char* julia_argv[] = {program_name, NULL};
+      init_julia_ptr(1, julia_argv);
+    }
   }
 
   snprintf(backend_libpath, sizeof(backend_libpath), "%s", libpath);
   return backend_handle;
+}
+
+SEXP C_backend_thread_count(SEXP libpath_) {
+  if (TYPEOF(libpath_) != STRSXP || Rf_length(libpath_) != 1) {
+    Rf_error("libpath must be a scalar string");
+  }
+
+  const char* libpath = CHAR(STRING_ELT(libpath_, 0));
+  void* h = load_backend(libpath);
+
+  if (backend_thread_count_ptr == NULL) {
+    backend_thread_count_ptr = (backend_thread_count_fn)dlsym(h, "backend_thread_count");
+  }
+  if (backend_thread_count_ptr == NULL) {
+    Rf_error("Symbol backend_thread_count not found in backend library");
+  }
+
+  return Rf_ScalarInteger(backend_thread_count_ptr());
 }
 
 SEXP C_jols_fit_xy(SEXP X_, SEXP y_, SEXP libpath_) {
@@ -651,6 +697,7 @@ SEXP C_augsynth_inference(SEXP X_, SEXP y_, SEXP trt_, SEXP inf_type_,
 }
 
 static const R_CallMethodDef CallEntries[] = {
+  {"C_backend_thread_count", (DL_FUNC)&C_backend_thread_count, 1},
   {"C_jols_fit_xy", (DL_FUNC)&C_jols_fit_xy, 3},
   {"C_jridge_fit_xy", (DL_FUNC)&C_jridge_fit_xy, 4},
   {"C_jsynth_weights", (DL_FUNC)&C_jsynth_weights, 3},

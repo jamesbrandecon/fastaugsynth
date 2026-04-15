@@ -2206,8 +2206,12 @@ function _conformal!(X::AbstractMatrix{Float64}, y::AbstractMatrix{Float64},
     base_pred = _predict_counterfactual(X, y, trt, base)
     base_weights = vec(base.weights)
     nthreads = Threads.nthreads()
-    use_inner_threads = nthreads > 1 && ns >= 500
-    use_outer_threads = tpost > 1 && nthreads > 1 && !use_inner_threads
+    # Pointwise iid conformal CIs now use the exact single-post path, so
+    # threading those tiny jobs is usually slower than leaving them serial.
+    # Reserve threads for the true multi-post iid null where the permutation
+    # work still scales with ns.
+    use_outer_threads = tpost > 1 && nthreads > 1 && type != 0
+    use_inner_threads = type == 0 && nthreads > 1 && ns >= 500
     if use_outer_threads
         lo_out = zeros(Float64, tpost)
         hi_out = zeros(Float64, tpost)
@@ -2296,7 +2300,7 @@ function _conformal!(X::AbstractMatrix{Float64}, y::AbstractMatrix{Float64},
                 holdout_length = holdout_length, min1se = min1se,
                 conformal_mode = conformal_mode,
                 V = V, fixedeff = fixedeff,
-                threaded_permutations = use_inner_threads,
+                threaded_permutations = false,
                 fit_cache = conf_cache
             )
             ci[1, j] = lo
@@ -2709,6 +2713,10 @@ Base.@ccallable function jackknife_unit_std(n::Cint, t0::Cint, tpost::Cint,
         holdout_length, min1seflag,
         errptr, errlen
     )
+end
+
+Base.@ccallable function backend_thread_count()::Cint
+    return Cint(Threads.nthreads())
 end
 
 Base.@ccallable function conformal_inference(n::Cint, t0::Cint, tpost::Cint,
