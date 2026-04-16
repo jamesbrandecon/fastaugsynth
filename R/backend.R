@@ -250,6 +250,139 @@ github_headers <- function(token = "", accept = "application/vnd.github+json") {
   headers
 }
 
+windows_powershell <- function() {
+  if (.Platform$OS.type != "windows") {
+    return("")
+  }
+
+  ps <- Sys.which("powershell.exe")
+  if (nzchar(ps)) {
+    return(ps)
+  }
+
+  Sys.which("powershell")
+}
+
+windows_ps_quote <- function(x) {
+  sprintf("'%s'", gsub("'", "''", x, fixed = TRUE))
+}
+
+windows_github_fetch_json <- function(url,
+                                      token = "",
+                                      accept = "application/vnd.github+json") {
+  ps <- windows_powershell()
+  if (!nzchar(ps)) {
+    stop("PowerShell is not available", call. = FALSE)
+  }
+
+  script <- tempfile("fastaugsynth-gh-", fileext = ".ps1")
+  stderr_file <- tempfile("fastaugsynth-gh-stderr-")
+  on.exit(unlink(c(script, stderr_file), force = TRUE), add = TRUE)
+
+  lines <- c(
+    "$ErrorActionPreference = 'Stop'",
+    "$headers = @{}",
+    sprintf("$headers['Accept'] = %s", windows_ps_quote(accept)),
+    "$headers['X-GitHub-Api-Version'] = '2022-11-28'"
+  )
+  if (nzchar(token)) {
+    lines <- c(lines, sprintf("$headers['Authorization'] = %s", windows_ps_quote(paste("Bearer", token))))
+  }
+  lines <- c(
+    lines,
+    sprintf("$resp = Invoke-WebRequest -UseBasicParsing -Headers $headers -Uri %s", windows_ps_quote(url)),
+    "[Console]::Out.Write($resp.Content)"
+  )
+  writeLines(lines, script, useBytes = TRUE)
+
+  output <- tryCatch(
+    suppressWarnings(system2(
+      ps,
+      c("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script),
+      stdout = TRUE,
+      stderr = stderr_file
+    )),
+    error = function(e) e
+  )
+  stderr_text <- paste(readLines(stderr_file, warn = FALSE), collapse = "\n")
+  if (inherits(output, "error")) {
+    stop(conditionMessage(output), call. = FALSE)
+  }
+
+  exit_status <- attr(output, "status")
+  if (!is.null(exit_status) && exit_status != 0L) {
+    message <- trimws(stderr_text)
+    if (!nzchar(message)) {
+      message <- "empty response body"
+    }
+    stop(
+      sprintf("PowerShell GitHub request failed (%s): %s", exit_status, message),
+      call. = FALSE
+    )
+  }
+
+  jsonlite::fromJSON(paste(output, collapse = "\n"), simplifyVector = TRUE)
+}
+
+windows_github_download_file <- function(url,
+                                         destfile,
+                                         token = "",
+                                         accept = "application/octet-stream") {
+  ps <- windows_powershell()
+  if (!nzchar(ps)) {
+    stop("PowerShell is not available", call. = FALSE)
+  }
+
+  script <- tempfile("fastaugsynth-gh-download-", fileext = ".ps1")
+  stderr_file <- tempfile("fastaugsynth-gh-download-stderr-")
+  on.exit(unlink(c(script, stderr_file), force = TRUE), add = TRUE)
+
+  lines <- c(
+    "$ErrorActionPreference = 'Stop'",
+    "$headers = @{}",
+    sprintf("$headers['Accept'] = %s", windows_ps_quote(accept)),
+    "$headers['X-GitHub-Api-Version'] = '2022-11-28'"
+  )
+  if (nzchar(token)) {
+    lines <- c(lines, sprintf("$headers['Authorization'] = %s", windows_ps_quote(paste("Bearer", token))))
+  }
+  lines <- c(
+    lines,
+    sprintf("Invoke-WebRequest -UseBasicParsing -Headers $headers -Uri %s -OutFile %s",
+            windows_ps_quote(url),
+            windows_ps_quote(normalizePath(destfile, winslash = "\\", mustWork = FALSE)))
+  )
+  writeLines(lines, script, useBytes = TRUE)
+
+  output <- tryCatch(
+    suppressWarnings(system2(
+      ps,
+      c("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script),
+      stdout = TRUE,
+      stderr = stderr_file
+    )),
+    error = function(e) e
+  )
+  stderr_text <- paste(readLines(stderr_file, warn = FALSE), collapse = "\n")
+  if (inherits(output, "error")) {
+    stop(conditionMessage(output), call. = FALSE)
+  }
+
+  exit_status <- attr(output, "status")
+  if (!is.null(exit_status) && exit_status != 0L) {
+    message <- trimws(stderr_text)
+    if (!nzchar(message)) {
+      message <- "empty response body"
+    }
+    stop(
+      sprintf("PowerShell GitHub download failed (%s): %s", exit_status, message),
+      call. = FALSE
+    )
+  }
+
+  invisible(destfile)
+}
+
 github_fetch_json <- function(url, token = "") {
   response <- tryCatch(
     curl::curl_fetch_memory(
@@ -260,6 +393,9 @@ github_fetch_json <- function(url, token = "") {
   )
 
   if (inherits(response, "error")) {
+    if (nzchar(windows_powershell())) {
+      return(windows_github_fetch_json(url, token = token))
+    }
     if (nzchar(backend_gh())) {
       return(jsonlite::fromJSON(gh_api_request(url), simplifyVector = TRUE))
     }
@@ -267,6 +403,9 @@ github_fetch_json <- function(url, token = "") {
   }
 
   if (response$status_code >= 300L) {
+    if (response$status_code %in% c(401L, 404L) && nzchar(windows_powershell())) {
+      return(windows_github_fetch_json(url, token = token))
+    }
     if (response$status_code %in% c(401L, 404L) && nzchar(backend_gh())) {
       return(jsonlite::fromJSON(gh_api_request(url), simplifyVector = TRUE))
     }
@@ -302,6 +441,9 @@ github_download_file <- function(url, destfile, token = "", accept = "applicatio
       quiet = TRUE
     ),
     error = function(e) {
+      if (nzchar(windows_powershell())) {
+        return(windows_github_download_file(url, destfile, token = token, accept = accept))
+      }
       if (nzchar(backend_gh())) {
         return(gh_api_request(url, accept = NULL, output = destfile))
       }
