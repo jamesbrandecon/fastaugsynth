@@ -18,22 +18,9 @@ on:
           - windows
 
 jobs:
-  build-backend:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-latest
-            artifact_name: statlibbackend-linux-x86_64
-            os_key: linux
-          - runner: macos-14
-            artifact_name: statlibbackend-darwin-arm64
-            os_key: macos
-          - runner: windows-latest
-            artifact_name: statlibbackend-windows-x86_64
-            os_key: windows
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' || matrix.os_key == inputs.target }}
-    runs-on: ${{ matrix.runner }}
+  build-backend-linux:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
@@ -49,14 +36,60 @@ jobs:
       - name: Upload backend artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
+          name: statlibbackend-linux-x86_64
+          path: |
+            backend/build/artifacts/*.tar.gz
+            backend/build/artifacts/*.sha256
+
+  build-backend-macos:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' }}
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.11'
+      - name: Test Julia backend package
+        run: julia --project=backend -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+      - name: Build Julia backend shared library
+        shell: bash
+        run: |
+          julia --project=backend backend/build/build_backend.jl
+          backend/build/package_backend.sh
+      - name: Upload backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: statlibbackend-darwin-arm64
+          path: |
+            backend/build/artifacts/*.tar.gz
+            backend/build/artifacts/*.sha256
+
+  build-backend-windows:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == 'windows' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.11'
+      - name: Test Julia backend package
+        run: julia --project=backend -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+      - name: Build Julia backend shared library
+        shell: bash
+        run: |
+          julia --project=backend backend/build/build_backend.jl
+          backend/build/package_backend.sh
+      - name: Upload backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: statlibbackend-windows-x86_64
           path: |
             backend/build/artifacts/*.tar.gz
             backend/build/artifacts/*.sha256
 
   verify-without-julia:
     runs-on: ubuntu-latest
-    needs: build-backend
+    needs: build-backend-linux
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' }}
     steps:
       - uses: actions/checkout@v4
@@ -103,7 +136,7 @@ jobs:
 
   verify-without-julia-windows:
     runs-on: windows-latest
-    needs: build-backend
+    needs: build-backend-windows
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == 'windows' }}
     steps:
       - uses: actions/checkout@v4
@@ -179,7 +212,7 @@ jobs:
 
   verify-backend-install-windows:
     runs-on: windows-latest
-    needs: build-backend
+    needs: build-backend-windows
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.target == 'windows' }}
     steps:
       - uses: actions/checkout@v4
