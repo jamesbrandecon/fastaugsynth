@@ -2,7 +2,7 @@ name: phase1-no-julia-runtime
 
 on:
   push:
-    branches: ["main"]
+    branches: ["**"]
   pull_request:
     branches: ["**"]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -18,6 +18,8 @@ jobs:
             artifact_name: statlibbackend-linux-x86_64
           - runner: macos-14
             artifact_name: statlibbackend-darwin-arm64
+          - runner: windows-latest
+            artifact_name: statlibbackend-windows-x86_64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -27,6 +29,7 @@ jobs:
       - name: Test Julia backend package
         run: julia --project=backend -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
       - name: Build Julia backend shared library
+        shell: bash
         run: |
           julia --project=backend backend/build/build_backend.jl
           backend/build/package_backend.sh
