@@ -1,0 +1,13 @@
+"case_id","case_label","package","donors","pre_periods","post_periods","elapsed_sec","elapsed_ms","label","speedup_vs_upstream"
+"large","Large
+140 donors, 180 pre, 90 post","augsynth",140,180,90,118.358,118358,"118.4 s",328.772222222223
+"large","Large
+140 donors, 180 pre, 90 post","fastaugsynth",140,180,90,0.359999999999999,359.999999999999,"360 ms",328.772222222223
+"medium","Medium
+40 donors, 80 pre, 40 post","augsynth",40,80,40,23.674,23674,"23.7 s",288.707317073174
+"medium","Medium
+40 donors, 80 pre, 40 post","fastaugsynth",40,80,40,0.081999999999999,81.999999999999,"82 ms",288.707317073174
+"small","Small
+20 donors, 40 pre, 20 post","augsynth",20,40,20,8.78,8780,"8.78 s",1463.33333333333
+"small","Small
+20 donors, 40 pre, 20 post","fastaugsynth",20,40,20,0.006,6,"6 ms",1463.33333333333
