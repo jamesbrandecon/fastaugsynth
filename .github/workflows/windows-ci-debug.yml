@@ -1,0 +1,129 @@
+name: windows-ci-debug
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to test
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  direct-windows-backend-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref_name }}
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.11'
+      - name: Test and build Julia backend
+        shell: bash
+        run: |
+          julia --project=backend -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+          julia --project=backend backend/build/build_backend.jl
+      - name: Setup R
+        uses: r-lib/actions/setup-r@v2
+      - name: Install R dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: any::Formula any::Synth any::curl any::gitcreds any::jsonlite any::testthat
+      - name: Install package and smoke direct backend load
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem -Path backend/build/dist -Filter *.dll -Recurse | Where-Object { $_.Name -match 'statlibbackend' } | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $dll) {
+            throw "statlibbackend dll not found under backend/build/dist"
+          }
+          $env:FASTAUGSYNTH_BACKEND_LIB = $dll
+          R CMD INSTALL .
+          $script = @'
+          library(fastaugsynth)
+          set.seed(42)
+          X <- cbind(1, matrix(rnorm(400), ncol = 4))
+          y <- as.vector(X %*% c(1, 2, 3, 4, 5) + rnorm(100))
+          fit <- fastaugsynth::jols_fit_xy(X, y)
+          ref <- lm.fit(X, y)
+          stopifnot(max(abs(fit$coefficients - unname(ref$coefficients))) < 1e-8)
+          cat("DIRECT_WINDOWS_BACKEND_SMOKE_OK\n")
+          '@
+          $path = Join-Path $env:RUNNER_TEMP "direct-windows-backend-smoke.R"
+          $script | Set-Content -Path $path -Encoding ASCII
+          Rscript $path
+      - name: Dump direct smoke diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "RUNNER_TEMP=$env:RUNNER_TEMP"
+          Write-Host "FASTAUGSYNTH_BACKEND_LIB=$env:FASTAUGSYNTH_BACKEND_LIB"
+          Write-Host "backend/build/dist contents:"
+          if (Test-Path backend/build/dist) {
+            Get-ChildItem backend/build/dist -Recurse | Select-Object FullName, Length
+          } else {
+            Write-Host "backend/build/dist missing"
+          }
+
+  backend-install-from-phase1:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref_name }}
+      - name: Setup R
+        uses: r-lib/actions/setup-r@v2
+      - name: Install R dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: any::Formula any::Synth any::curl any::gitcreds any::jsonlite any::testthat
+      - name: Install package
+        run: R CMD INSTALL .
+      - name: Backend install smoke from latest phase1 run on ref
+        shell: pwsh
+        env:
+          TEST_REF: ${{ inputs.ref || github.ref_name }}
+          GITHUB_PAT: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $script = @'
+          library(fastaugsynth)
+          ref <- Sys.getenv("TEST_REF")
+          fastaugsynth::backend_install(
+            repo = "jamesbrandecon/fastaugsynth",
+            ref = ref,
+            workflow = "phase1-no-julia-runtime.yml",
+            force = TRUE,
+            quiet = FALSE,
+            token = Sys.getenv("GITHUB_PAT")
+          )
+          status <- fastaugsynth::backend_status()
+          print(status)
+          stopifnot(status$exists)
+          set.seed(42)
+          X <- cbind(1, matrix(rnorm(400), ncol = 4))
+          y <- as.vector(X %*% c(1, 2, 3, 4, 5) + rnorm(100))
+          fit <- fastaugsynth::jols_fit_xy(X, y)
+          ref_fit <- lm.fit(X, y)
+          stopifnot(max(abs(fit$coefficients - unname(ref_fit$coefficients))) < 1e-8)
+          cat("BACKEND_INSTALL_WINDOWS_SMOKE_OK\n")
+          '@
+          $path = Join-Path $env:RUNNER_TEMP "backend-install-windows-smoke.R"
+          $script | Set-Content -Path $path -Encoding ASCII
+          Rscript $path
+      - name: Dump backend-install diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "RUNNER_TEMP=$env:RUNNER_TEMP"
+          Write-Host "USERPROFILE=$env:USERPROFILE"
+          Write-Host "fastaugsynth cache contents:"
+          $cache = Join-Path $env:USERPROFILE ".cache\\fastaugsynth"
+          if (Test-Path $cache) {
+            Get-ChildItem $cache -Recurse | Select-Object FullName, Length
+          } else {
+            Write-Host "$cache missing"
+          }
