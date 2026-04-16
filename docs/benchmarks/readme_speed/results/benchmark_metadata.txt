@@ -1,0 +1,19 @@
+generated_at: 2026-04-15 12:15:23 PDT
+backend_lib: /Users/jamesbrand/Dropbox/git_stuff/jlrstats/backend/build/dist/lib/libstatlibbackend.dylib
+reps: 3
+seed: 20260409
+sweep: donors
+sweep_values: 40,60,80,100,120,140
+inference: jackknife
+with_gsynth: FALSE
+R.version: R version 4.5.2 (2025-10-31)
+platform: aarch64-apple-darwin20
+fastaugsynth.version: 0.1.0
+augsynth.version: 0.2.0
+gsynth.version: not run
+scenario[1]: donors=40, pre_periods=180, post_periods=90
+scenario[2]: donors=60, pre_periods=180, post_periods=90
+scenario[3]: donors=80, pre_periods=180, post_periods=90
+scenario[4]: donors=100, pre_periods=180, post_periods=90
+scenario[5]: donors=120, pre_periods=180, post_periods=90
+scenario[6]: donors=140, pre_periods=180, post_periods=90
