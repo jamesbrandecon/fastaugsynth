@@ -2,7 +2,12 @@
 #include <Rinternals.h>
 #include <R_ext/Rdynload.h>
 
+#include <stdio.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 
@@ -61,7 +66,13 @@ typedef int (*backend_thread_count_fn)(void);
 
 typedef void (*init_julia_fn)(int, char**);
 
-static void* backend_handle = NULL;
+#ifdef _WIN32
+typedef HMODULE backend_lib_handle_t;
+#else
+typedef void* backend_lib_handle_t;
+#endif
+
+static backend_lib_handle_t backend_handle = NULL;
 static fit_ols_dense_fn fit_ols_dense_ptr = NULL;
 static fit_ridge_loocv_dense_fn fit_ridge_loocv_dense_ptr = NULL;
 static fit_synth_weights_fn fit_synth_weights_ptr = NULL;
@@ -73,6 +84,83 @@ static augsynth_inference_fn augsynth_inference_ptr = NULL;
 static backend_thread_count_fn backend_thread_count_ptr = NULL;
 static init_julia_fn init_julia_ptr = NULL;
 static char backend_libpath[4096] = "";
+static char backend_error_buffer[4096] = "";
+
+static const char* backend_last_error(void) {
+  return backend_error_buffer[0] != '\0' ? backend_error_buffer : "unknown error";
+}
+
+#ifdef _WIN32
+static void set_windows_error_message(DWORD error_code) {
+  DWORD status;
+
+  backend_error_buffer[0] = '\0';
+  if (error_code == 0) {
+    snprintf(backend_error_buffer, sizeof(backend_error_buffer), "unknown error");
+    return;
+  }
+
+  status = FormatMessageA(
+    FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+    NULL,
+    error_code,
+    MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+    backend_error_buffer,
+    (DWORD)sizeof(backend_error_buffer),
+    NULL
+  );
+  if (status == 0 || backend_error_buffer[0] == '\0') {
+    snprintf(backend_error_buffer, sizeof(backend_error_buffer), "Windows error code %lu", (unsigned long)error_code);
+    return;
+  }
+
+  while (status > 0 &&
+         (backend_error_buffer[status - 1] == '\r' || backend_error_buffer[status - 1] == '\n')) {
+    backend_error_buffer[status - 1] = '\0';
+    status--;
+  }
+}
+#endif
+
+static backend_lib_handle_t backend_dlopen(const char* libpath) {
+  backend_error_buffer[0] = '\0';
+#ifdef _WIN32
+  backend_handle = LoadLibraryA(libpath);
+  if (backend_handle == NULL) {
+    set_windows_error_message(GetLastError());
+  }
+  return backend_handle;
+#else
+  backend_handle = dlopen(libpath, RTLD_NOW | RTLD_GLOBAL);
+  if (backend_handle == NULL) {
+    const char* err = dlerror();
+    snprintf(backend_error_buffer, sizeof(backend_error_buffer), "%s", err != NULL ? err : "unknown error");
+  }
+  return backend_handle;
+#endif
+}
+
+static void* backend_dlsym(backend_lib_handle_t handle, const char* symbol) {
+  backend_error_buffer[0] = '\0';
+#ifdef _WIN32
+  FARPROC proc = GetProcAddress(handle, symbol);
+  if (proc == NULL) {
+    set_windows_error_message(GetLastError());
+  }
+  return (void*)proc;
+#else
+  void* proc;
+  dlerror();
+  proc = dlsym(handle, symbol);
+  if (proc == NULL) {
+    const char* err = dlerror();
+    if (err != NULL) {
+      snprintf(backend_error_buffer, sizeof(backend_error_buffer), "%s", err);
+    }
+  }
+  return proc;
+#endif
+}
 
 static const char* configured_julia_threads(void) {
   const char* threads = getenv("FASTAUGSYNTH_JULIA_THREADS");
@@ -86,7 +174,7 @@ static const char* configured_julia_threads(void) {
   return NULL;
 }
 
-static void* load_backend(const char* libpath) {
+static backend_lib_handle_t load_backend(const char* libpath) {
   if (backend_handle != NULL) {
     if (strcmp(backend_libpath, libpath) != 0) {
       Rf_error("Backend already loaded from '%s'; cannot switch to '%s' in the same R session", backend_libpath, libpath);
@@ -94,14 +182,14 @@ static void* load_backend(const char* libpath) {
     return backend_handle;
   }
 
-  backend_handle = dlopen(libpath, RTLD_NOW | RTLD_GLOBAL);
+  backend_handle = backend_dlopen(libpath);
   if (backend_handle == NULL) {
-    Rf_error("Failed to load backend library at '%s': %s", libpath, dlerror());
+    Rf_error("Failed to load backend library at '%s': %s", libpath, backend_last_error());
   }
 
-  init_julia_ptr = (init_julia_fn)dlsym(backend_handle, "init_julia");
+  init_julia_ptr = (init_julia_fn)backend_dlsym(backend_handle, "init_julia");
   if (init_julia_ptr == NULL) {
-    Rf_error("Symbol init_julia not found in backend library");
+    Rf_error("Symbol init_julia not found in backend library: %s", backend_last_error());
   }
 
   {
@@ -128,13 +216,13 @@ SEXP C_backend_thread_count(SEXP libpath_) {
   }
 
   const char* libpath = CHAR(STRING_ELT(libpath_, 0));
-  void* h = load_backend(libpath);
+  backend_lib_handle_t h = load_backend(libpath);
 
   if (backend_thread_count_ptr == NULL) {
-    backend_thread_count_ptr = (backend_thread_count_fn)dlsym(h, "backend_thread_count");
+    backend_thread_count_ptr = (backend_thread_count_fn)backend_dlsym(h, "backend_thread_count");
   }
   if (backend_thread_count_ptr == NULL) {
-    Rf_error("Symbol backend_thread_count not found in backend library");
+    Rf_error("Symbol backend_thread_count not found in backend library: %s", backend_last_error());
   }
 
   return Rf_ScalarInteger(backend_thread_count_ptr());
@@ -151,13 +239,13 @@ SEXP C_jols_fit_xy(SEXP X_, SEXP y_, SEXP libpath_) {
   if (Rf_length(y_) != n) Rf_error("nrow(X) must equal length(y)");
 
   const char* libpath = CHAR(STRING_ELT(libpath_, 0));
-  void* h = load_backend(libpath);
+  backend_lib_handle_t h = load_backend(libpath);
 
   if (fit_ols_dense_ptr == NULL) {
-    fit_ols_dense_ptr = (fit_ols_dense_fn)dlsym(h, "fit_ols_dense");
+    fit_ols_dense_ptr = (fit_ols_dense_fn)backend_dlsym(h, "fit_ols_dense");
   }
   if (fit_ols_dense_ptr == NULL) {
-    Rf_error("Symbol fit_ols_dense not found in backend library");
+    Rf_error("Symbol fit_ols_dense not found in backend library: %s", backend_last_error());
   }
 
   SEXP coef = PROTECT(Rf_allocVector(REALSXP, p));
@@ -201,13 +289,13 @@ SEXP C_jridge_fit_xy(SEXP X_, SEXP y_, SEXP lambdas_, SEXP libpath_) {
   if (nlambda <= 0) Rf_error("lambdas must be non-empty");
 
   const char* libpath = CHAR(STRING_ELT(libpath_, 0));
-  void* h = load_backend(libpath);
+  backend_lib_handle_t h = load_backend(libpath);
 
   if (fit_ridge_loocv_dense_ptr == NULL) {
-    fit_ridge_loocv_dense_ptr = (fit_ridge_loocv_dense_fn)dlsym(h, "fit_ridge_loocv_dense");
+    fit_ridge_loocv_dense_ptr = (fit_ridge_loocv_dense_fn)backend_dlsym(h, "fit_ridge_loocv_dense");
   }
   if (fit_ridge_loocv_dense_ptr == NULL) {
-    Rf_error("Symbol fit_ridge_loocv_dense not found in backend library");
+    Rf_error("Symbol fit_ridge_loocv_dense not found in backend library: %s", backend_last_error());
   }
 
   SEXP coef = PROTECT(Rf_allocVector(REALSXP, p));
@@ -245,13 +333,13 @@ SEXP C_jsynth_weights(SEXP donors_, SEXP target_, SEXP libpath_) {
   if (Rf_length(target_) != t0) Rf_error("ncol(donors) must equal length(target)");
 
   const char* libpath = CHAR(STRING_ELT(libpath_, 0));
-  void* h = load_backend(libpath);
+  backend_lib_handle_t h = load_backend(libpath);
 
   if (fit_synth_weights_ptr == NULL) {
-    fit_synth_weights_ptr = (fit_synth_weights_fn)dlsym(h, "fit_synth_weights");
+    fit_synth_weights_ptr = (fit_synth_weights_fn)backend_dlsym(h, "fit_synth_weights");
   }
   if (fit_synth_weights_ptr == NULL) {
-    Rf_error("Symbol fit_synth_weights not found in backend library");
+    Rf_error("Symbol fit_synth_weights not found in backend library: %s", backend_last_error());
   }
 
   SEXP weights = PROTECT(Rf_allocVector(REALSXP, n0));
@@ -284,13 +372,13 @@ SEXP C_jridge_augsynth_inner(SEXP Xc_, SEXP x1_, SEXP ridge_, SEXP scm_,
   if (Rf_length(x1_) != t0) Rf_error("ncol(Xc) must equal length(x1)");
 
   const char* libpath = CHAR(STRING_ELT(libpath_, 0));
-  void* h = load_backend(libpath);
+  backend_lib_handle_t h = load_backend(libpath);
 
   if (fit_ridge_augsynth_inner_ptr == NULL) {
-    fit_ridge_augsynth_inner_ptr = (fit_ridge_augsynth_inner_fn)dlsym(h, "fit_ridge_augsynth_inner");
+    fit_ridge_augsynth_inner_ptr = (fit_ridge_augsynth_inner_fn)backend_dlsym(h, "fit_ridge_augsynth_inner");
   }
   if (fit_ridge_augsynth_inner_ptr == NULL) {
-    Rf_error("Symbol fit_ridge_augsynth_inner not found in backend library");
+    Rf_error("Symbol fit_ridge_augsynth_inner not found in backend library: %s", backend_last_error());
   }
 
   SEXP weights = PROTECT(Rf_allocVector(REALSXP, n0));
@@ -355,13 +443,13 @@ SEXP C_jackknife_plus(SEXP X_, SEXP y_, SEXP trt_, SEXP ridge_,
   if (Rf_length(trt_) != n) Rf_error("length(trt) must equal nrow(X)");
 
   const char* libpath = CHAR(STRING_ELT(libpath_, 0));
-  void* h = load_backend(libpath);
+  backend_lib_handle_t h = load_backend(libpath);
 
   if (jackknife_plus_ptr == NULL) {
-    jackknife_plus_ptr = (jackknife_plus_fn)dlsym(h, "jackknife_plus");
+    jackknife_plus_ptr = (jackknife_plus_fn)backend_dlsym(h, "jackknife_plus");
   }
   if (jackknife_plus_ptr == NULL) {
-    Rf_error("Symbol jackknife_plus not found in backend library");
+    Rf_error("Symbol jackknife_plus not found in backend library: %s", backend_last_error());
   }
 
   int total = t0 + tpost + 1;
@@ -420,13 +508,13 @@ SEXP C_jackknife_unit_std(SEXP X_, SEXP y_, SEXP trt_, SEXP ridge_,
   if (Rf_length(trt_) != n) Rf_error("length(trt) must equal nrow(X)");
 
   const char* libpath = CHAR(STRING_ELT(libpath_, 0));
-  void* h = load_backend(libpath);
+  backend_lib_handle_t h = load_backend(libpath);
 
   if (jackknife_unit_std_ptr == NULL) {
-    jackknife_unit_std_ptr = (jackknife_unit_std_fn)dlsym(h, "jackknife_unit_std");
+    jackknife_unit_std_ptr = (jackknife_unit_std_fn)backend_dlsym(h, "jackknife_unit_std");
   }
   if (jackknife_unit_std_ptr == NULL) {
-    Rf_error("Symbol jackknife_unit_std not found in backend library");
+    Rf_error("Symbol jackknife_unit_std not found in backend library: %s", backend_last_error());
   }
 
   int total = t0 + tpost + 1;
@@ -496,13 +584,13 @@ SEXP C_conformal_inference(SEXP X_, SEXP y_, SEXP trt_, SEXP ridge_,
   }
 
   const char* libpath = CHAR(STRING_ELT(libpath_, 0));
-  void* h = load_backend(libpath);
+  backend_lib_handle_t h = load_backend(libpath);
 
   if (conformal_inference_ptr == NULL) {
-    conformal_inference_ptr = (conformal_inference_fn)dlsym(h, "conformal_inference");
+    conformal_inference_ptr = (conformal_inference_fn)backend_dlsym(h, "conformal_inference");
   }
   if (conformal_inference_ptr == NULL) {
-    Rf_error("Symbol conformal_inference not found in backend library");
+    Rf_error("Symbol conformal_inference not found in backend library: %s", backend_last_error());
   }
 
   int total = t0 + tpost + 1;
@@ -601,13 +689,13 @@ SEXP C_augsynth_inference(SEXP X_, SEXP y_, SEXP trt_, SEXP inf_type_,
   if (Rf_length(trt_) != n) Rf_error("length(trt) must equal nrow(X)");
 
   const char* libpath = CHAR(STRING_ELT(libpath_, 0));
-  void* h = load_backend(libpath);
+  backend_lib_handle_t h = load_backend(libpath);
 
   if (augsynth_inference_ptr == NULL) {
-    augsynth_inference_ptr = (augsynth_inference_fn)dlsym(h, "augsynth_inference");
+    augsynth_inference_ptr = (augsynth_inference_fn)backend_dlsym(h, "augsynth_inference");
   }
   if (augsynth_inference_ptr == NULL) {
-    Rf_error("Symbol augsynth_inference not found in backend library");
+    Rf_error("Symbol augsynth_inference not found in backend library: %s", backend_last_error());
   }
 
   int total = t0 + tpost + 1;
