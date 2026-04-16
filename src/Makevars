@@ -1,0 +1,5 @@
+PKG_LIBS =
+
+ifeq ($(shell uname -s),Linux)
+PKG_LIBS += -ldl
+endif

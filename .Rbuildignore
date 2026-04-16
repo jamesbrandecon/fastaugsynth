@@ -1,0 +1,7 @@
+^\.github$
+^backend$
+^docs$
+^tmp$
+^statlibR$
+^\.julialocal$
+^\.DS_Store$
