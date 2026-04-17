@@ -1,12 +1,10 @@
 # fastaugsynth
 
-`fastaugsynth` is an experimental R package that keeps the upstream `augsynth`-style API but routes the heavy work through a compiled Julia backend.
+`fastaugsynth` is an experimental R clone of [augsynth](https://github.com/ebenmichael/augsynth), with a compiled Julia backend for speed.
 
-This repository was built with heavy AI assistance. The current package should be viewed as an AI-assisted Julia/R port of `augsynth`, with a small number of explicit algorithmic changes for speed and validation.
+This repository was built with heavy AI assistance. The current package should be viewed as a direct AI-assisted Julia/R port of `augsynth`, with a small number of explicit algorithmic changes for speed and validation.
 
 ## Scope
-
-`fastaugsynth` is currently focused on one narrow goal: be a very fast `augsynth` implementation for R while staying close to upstream behavior.
 
 Current surface:
 
@@ -20,8 +18,6 @@ Not implemented:
 - multi-outcome support
 
 ## Installation
-
-The package name and GitHub repo slug are both `fastaugsynth`.
 
 ```r
 if (!requireNamespace("remotes", quietly = TRUE)) install.packages("remotes")
@@ -37,11 +33,9 @@ if (!fastaugsynth::backend_status()$exists) {
 }
 ```
 
-For the public repo, `remotes::install_github()` should not require a special PAT.
+<!-- For the public repo, `remotes::install_github()` should not require a special PAT. -->
 
-The repo root is the R package root. The Julia backend, docs, and temp benchmarking material stay in the repo but are excluded from the package build.
-
-`backend_install()` downloads the prebuilt backend artifact for your platform from this repository's GitHub Actions runs.
+`backend_install()` downloads the prebuilt backend artifact for your platform from this repository's GitHub Actions runs. We have tested Linux, MacOS ARM, and Windows builds/installs. 
 
 If you are testing a non-default branch, install that branch and point backend installation at the same ref:
 
@@ -65,7 +59,7 @@ If GitHub asks for authentication while downloading the backend artifact, the pa
 - `gitcreds`
 
 ## Quick Start
-
+The functionality for `fastaugsynth` should be plug and play with any other existing `augsynth` code. As a result, you'll need to prepend the function calls with `fastaugsynth::` or be careful to only load the fast library to avoid namespace conflicts.
 ```r
 fit <- fastaugsynth::augsynth(
   outcome ~ trt,
@@ -77,11 +71,11 @@ fit <- fastaugsynth::augsynth(
   t_int = treatment_start
 )
 
-summary(fit, inf = TRUE, inf_type = "jackknife")
-summary(fit, inf = TRUE, inf_type = "conformal")
+fastaugsynth::summary(fit, inf = TRUE, inf_type = "jackknife")
+fastaugsynth::summary(fit, inf = TRUE, inf_type = "conformal")
 
 # closer-to-upstream validation mode
-summary(
+fastaugsynth::summary(
   fit,
   inf = TRUE,
   inf_type = "conformal",
@@ -90,7 +84,7 @@ summary(
 )
 ```
 
-Embedded Julia thread count can be controlled with:
+Increasing the number of Julia threads used will increase speed further in some cases. Embedded Julia thread count can be controlled with:
 
 ```r
 Sys.setenv(FASTAUGSYNTH_JULIA_THREADS = "auto")
@@ -99,15 +93,13 @@ fastaugsynth:::backend_thread_count()
 
 ## Benchmarks
 
-The package story is simplest in pictures.
-
-This donor-sweep benchmark fixes `180` pre-treatment periods and `90` post-treatment periods and compares `fastaugsynth` against upstream `augsynth` on estimation and jackknife inference:
+The package story is simplest in pictures. This donor-sweep benchmark fixes `180` pre-treatment periods and `90` post-treatment periods and compares `fastaugsynth` against upstream `augsynth` on estimation and jackknife inference:
 
 ![Donor sweep benchmark](docs/figures/fastaugsynth_donor_sweep.png)
 
-This figure covers estimation and jackknife only; it does not include conformal.
+This figure covers estimation and jackknife only; it does not include conformal inference.
 
-On that donor sweep, jackknife summary currently ranges from about `4.2 ms` to `10.9 ms` for `fastaugsynth` versus about `81.7 ms` to `347.3 ms` for upstream `augsynth`.
+On that donor sweep, the jackknife inference call currently ranges from about `4.2 ms` to `10.9 ms` for `fastaugsynth` versus about `81.7 ms` to `347.3 ms` for upstream `augsynth`.
 
 A separate conformal-only comparison benchmarks direct `summary.augsynth(..., inf_type = "conformal")` calls on three simulated panels:
 
@@ -116,11 +108,6 @@ A separate conformal-only comparison benchmarks direct `summary.augsynth(..., in
 On those three cases, `fastaugsynth` currently takes about `6 ms`, `82 ms`, and `360 ms`, versus about `8.78 s`, `23.7 s`, and `118.4 s` for upstream `augsynth`.
 
 Within `fastaugsynth` on that larger case, the isolated joint multi-post `iid` kernel is about `48.4 ms` on `1` Julia thread and about `12.8 ms` on `6` Julia threads.
-
-That is the important distinction in the current implementation:
-
-- the full pointwise conformal summary is already dominated by exact single-post work and stays fast on one thread
-- Julia threading helps more on the true multi-post `iid` permutation path
 
 Reproduction scripts live in [inst/benchmarks/README.md](inst/benchmarks/README.md).
 
