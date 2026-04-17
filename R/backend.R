@@ -37,13 +37,26 @@ backend_library_ext <- function() {
   }
 }
 
-backend_candidates <- function(cache_roots = backend_cache_roots()) {
+backend_library_basenames <- function() {
   ext <- backend_library_ext()
+  if (.Platform$OS.type == "windows") {
+    return(c(
+      paste0("libstatlibbackend.", ext),
+      paste0("statlibbackend.", ext)
+    ))
+  }
+
+  paste0("libstatlibbackend.", ext)
+}
+
+backend_candidates <- function(cache_roots = backend_cache_roots()) {
   unlist(lapply(cache_roots, function(cache_root) {
-    c(
-      file.path(cache_root, "lib", paste0("libstatlibbackend.", ext)),
-      file.path(cache_root, paste0("libstatlibbackend.", ext))
-    )
+    unlist(lapply(backend_library_basenames(), function(libname) {
+      c(
+        file.path(cache_root, "lib", libname),
+        file.path(cache_root, libname)
+      )
+    }), use.names = FALSE)
   }), use.names = FALSE)
 }
 
@@ -476,7 +489,8 @@ backend_install_message <- function() {
 }
 
 backend_find_library <- function(cache_dir) {
-  pattern <- paste0("libstatlibbackend\\.", backend_library_ext(), "$")
+  basenames <- backend_library_basenames()
+  pattern <- paste0("(", paste(gsub("\\.", "\\\\.", basenames), collapse = "|"), ")$")
   matches <- list.files(cache_dir, pattern = pattern, recursive = TRUE, full.names = TRUE)
   if (!length(matches)) {
     stop(
