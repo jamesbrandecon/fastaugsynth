@@ -10,6 +10,36 @@ mkdir -p "$OUT_DIR"
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
+
+case "$OS" in
+  linux*)
+    OS="linux"
+    ;;
+  darwin*)
+    OS="darwin"
+    ;;
+  msys*|mingw*|cygwin*)
+    OS="windows"
+    ;;
+  *)
+    echo "Unsupported OS name from uname: $OS" >&2
+    exit 1
+    ;;
+esac
+
+case "$ARCH" in
+  x86_64|amd64)
+    ARCH="x86_64"
+    ;;
+  arm64|aarch64)
+    ARCH="arm64"
+    ;;
+  *)
+    echo "Unsupported architecture from uname: $ARCH" >&2
+    exit 1
+    ;;
+esac
+
 ASSET="statlibbackend-${OS}-${ARCH}.tar.gz"
 
 if [ ! -d "$DIST_DIR" ]; then

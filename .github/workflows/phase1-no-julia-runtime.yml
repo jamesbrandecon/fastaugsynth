@@ -1,24 +1,35 @@
 name: phase1-no-julia-runtime
 
+permissions:
+  contents: read
+  actions: read
+  packages: read
+
 on:
   push:
-    branches: ["main"]
+    branches: ["**"]
   pull_request:
     branches: ["**"]
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
+    inputs:
+      target:
+        description: CI target to run
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - windows
+      windows_artifact_run_id:
+        description: Existing workflow run id with a Windows backend artifact to reuse
+        required: false
+        default: ""
 
 jobs:
-  build-backend:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-latest
-            artifact_name: statlibbackend-linux-x86_64
-          - runner: macos-14
-            artifact_name: statlibbackend-darwin-arm64
-    runs-on: ${{ matrix.runner }}
+  build-backend-linux:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
@@ -27,20 +38,68 @@ jobs:
       - name: Test Julia backend package
         run: julia --project=backend -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
       - name: Build Julia backend shared library
+        shell: bash
         run: |
           julia --project=backend backend/build/build_backend.jl
           backend/build/package_backend.sh
       - name: Upload backend artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
+          name: statlibbackend-linux-x86_64
+          path: |
+            backend/build/artifacts/*.tar.gz
+            backend/build/artifacts/*.sha256
+
+  build-backend-macos:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' }}
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.11'
+      - name: Test Julia backend package
+        run: julia --project=backend -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+      - name: Build Julia backend shared library
+        shell: bash
+        run: |
+          julia --project=backend backend/build/build_backend.jl
+          backend/build/package_backend.sh
+      - name: Upload backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: statlibbackend-darwin-arm64
+          path: |
+            backend/build/artifacts/*.tar.gz
+            backend/build/artifacts/*.sha256
+
+  build-backend-windows:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' || (inputs.target == 'windows' && inputs.windows_artifact_run_id == '') }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.11'
+      - name: Test Julia backend package
+        run: julia --project=backend -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+      - name: Build Julia backend shared library
+        shell: bash
+        run: |
+          julia --project=backend backend/build/build_backend.jl
+          backend/build/package_backend.sh
+      - name: Upload backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: statlibbackend-windows-x86_64
           path: |
             backend/build/artifacts/*.tar.gz
             backend/build/artifacts/*.sha256
 
   verify-without-julia:
     runs-on: ubuntu-latest
-    needs: build-backend
+    needs: build-backend-linux
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' }}
     steps:
       - uses: actions/checkout@v4
       - name: Block Julia execution in runtime job
@@ -83,3 +142,170 @@ jobs:
           R CMD INSTALL .
           Rscript -e 'library(fastaugsynth); set.seed(42); X <- cbind(1, matrix(rnorm(400), ncol = 4)); y <- X %*% c(1,2,3,4,5) + rnorm(100); fit <- jols_fit_xy(X, as.vector(y)); ref <- lm.fit(X, as.vector(y)); stopifnot(max(abs(fit$coefficients - unname(ref$coefficients))) < 1e-8)'
           Rscript -e 'library(fastaugsynth); library(testthat); testthat::test_dir("tests/testthat")'
+
+  verify-without-julia-windows:
+    runs-on: windows-latest
+    needs: build-backend-windows
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == 'windows') && (needs.build-backend-windows.result == 'success' || needs.build-backend-windows.result == 'skipped') }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Block Julia execution in runtime job
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP "no-julia\\bin"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $shim = Join-Path $dir "julia.cmd"
+          @"
+          @echo off
+          echo julia must not be invoked in verify-without-julia-windows 1>&2
+          exit /b 99
+          "@ | Set-Content -Path $shim -Encoding ASCII
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+      - name: Setup R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          rtools-version: '45'
+      - name: Install R dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: any::Formula any::Synth any::curl any::gitcreds any::jsonlite any::testthat
+      - name: Download backend artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: statlibbackend-windows-x86_64
+          path: backend-artifact
+          repository: jamesbrandecon/fastaugsynth
+          run-id: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_artifact_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: Unpack backend artifact
+        shell: pwsh
+        run: |
+          $cache = Join-Path $env:USERPROFILE ".cache\\fastaugsynth\\backend"
+          New-Item -ItemType Directory -Force -Path $cache | Out-Null
+          $script = @'
+          args <- commandArgs(trailingOnly = TRUE)
+          utils::untar(args[[1]], exdir = args[[2]])
+          '@
+          $path = Join-Path $env:RUNNER_TEMP "untar-backend-artifact.R"
+          $script | Set-Content -Path $path -Encoding ASCII
+          Rscript $path "backend-artifact/statlibbackend-windows-x86_64.tar.gz" $cache
+          Get-ChildItem $cache -Recurse | Select-Object FullName, Length
+      - name: Install and test R package using backend (without Julia)
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem -Path (Join-Path $env:USERPROFILE ".cache\\fastaugsynth\\backend") -Recurse -File |
+            Where-Object { $_.Name -in @("libstatlibbackend.dll", "statlibbackend.dll") } |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $dll) {
+            throw "Backend DLL not found"
+          }
+          $env:FASTAUGSYNTH_BACKEND_LIB = $dll
+          $install = @'
+          lib <- normalizePath(Sys.getenv("R_LIBS_USER"), winslash = "/", mustWork = TRUE)
+          install.packages(".", repos = NULL, type = "source", lib = lib)
+          '@
+          $installPath = Join-Path $env:RUNNER_TEMP "install-package-windows.R"
+          $install | Set-Content -Path $installPath -Encoding ASCII
+          Rscript $installPath
+          $script = @'
+          pkg_lib <- normalizePath(Sys.getenv("R_LIBS_USER"), winslash = "/", mustWork = TRUE)
+          print(list.files(pkg_lib))
+          library(fastaugsynth, lib.loc = pkg_lib)
+          set.seed(42)
+          X <- cbind(1, matrix(rnorm(400), ncol = 4))
+          y <- X %*% c(1, 2, 3, 4, 5) + rnorm(100)
+          fit <- jols_fit_xy(X, as.vector(y))
+          ref <- lm.fit(X, as.vector(y))
+          stopifnot(max(abs(fit$coefficients - unname(ref$coefficients))) < 1e-8)
+          library(testthat)
+          testthat::test_dir("tests/testthat", reporter = "summary")
+          cat("VERIFY_WITHOUT_JULIA_WINDOWS_OK\n")
+          '@
+          $path = Join-Path $env:RUNNER_TEMP "verify-without-julia-windows.R"
+          $script | Set-Content -Path $path -Encoding ASCII
+          Rscript $path
+      - name: Dump Windows verify diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "RUNNER_TEMP=$env:RUNNER_TEMP"
+          Write-Host "USERPROFILE=$env:USERPROFILE"
+          Write-Host "FASTAUGSYNTH_BACKEND_LIB=$env:FASTAUGSYNTH_BACKEND_LIB"
+          $cache = Join-Path $env:USERPROFILE ".cache\\fastaugsynth"
+          if (Test-Path $cache) {
+            Get-ChildItem $cache -Recurse | Select-Object FullName, Length
+          } else {
+            Write-Host "$cache missing"
+          }
+
+  verify-backend-install-windows:
+    runs-on: windows-latest
+    needs: build-backend-windows
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.target == 'windows' && (needs.build-backend-windows.result == 'success' || needs.build-backend-windows.result == 'skipped') }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          rtools-version: '45'
+      - name: Install R dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: any::Formula any::Synth any::curl any::gitcreds any::jsonlite any::testthat
+      - name: Install package
+        shell: pwsh
+        run: |
+          $install = @'
+          lib <- normalizePath(Sys.getenv("R_LIBS_USER"), winslash = "/", mustWork = TRUE)
+          install.packages(".", repos = NULL, type = "source", lib = lib)
+          '@
+          $installPath = Join-Path $env:RUNNER_TEMP "install-package-windows.R"
+          $install | Set-Content -Path $installPath -Encoding ASCII
+          Rscript $installPath
+      - name: Backend install smoke from latest successful branch artifact
+        shell: pwsh
+        env:
+          TEST_REF: ${{ github.ref_name }}
+          GITHUB_PAT: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $script = @'
+          pkg_lib <- normalizePath(Sys.getenv("R_LIBS_USER"), winslash = "/", mustWork = TRUE)
+          print(list.files(pkg_lib))
+          library(fastaugsynth, lib.loc = pkg_lib)
+          ref <- Sys.getenv("TEST_REF")
+          fastaugsynth::backend_install(
+            repo = "jamesbrandecon/fastaugsynth",
+            ref = ref,
+            sha = "",
+            workflow = "phase1-no-julia-runtime.yml",
+            force = TRUE,
+            quiet = FALSE,
+            token = Sys.getenv("GITHUB_PAT")
+          )
+          status <- fastaugsynth::backend_status()
+          print(status)
+          stopifnot(status$exists)
+          set.seed(42)
+          X <- cbind(1, matrix(rnorm(400), ncol = 4))
+          y <- X %*% c(1, 2, 3, 4, 5) + rnorm(100)
+          fit <- jols_fit_xy(X, as.vector(y))
+          ref_fit <- lm.fit(X, as.vector(y))
+          stopifnot(max(abs(fit$coefficients - unname(ref_fit$coefficients))) < 1e-8)
+          cat("VERIFY_BACKEND_INSTALL_WINDOWS_OK\n")
+          '@
+          $path = Join-Path $env:RUNNER_TEMP "verify-backend-install-windows.R"
+          $script | Set-Content -Path $path -Encoding ASCII
+          Rscript $path
+      - name: Dump backend-install diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "RUNNER_TEMP=$env:RUNNER_TEMP"
+          Write-Host "USERPROFILE=$env:USERPROFILE"
+          $cache = Join-Path $env:USERPROFILE ".cache\\fastaugsynth"
+          if (Test-Path $cache) {
+            Get-ChildItem $cache -Recurse | Select-Object FullName, Length
+          } else {
+            Write-Host "$cache missing"
+          }

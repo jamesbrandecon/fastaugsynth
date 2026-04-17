@@ -37,21 +37,46 @@ backend_library_ext <- function() {
   }
 }
 
-backend_candidates <- function(cache_roots = backend_cache_roots()) {
+backend_library_basenames <- function() {
   ext <- backend_library_ext()
+  if (.Platform$OS.type == "windows") {
+    return(c(
+      paste0("libstatlibbackend.", ext),
+      paste0("statlibbackend.", ext)
+    ))
+  }
+
+  paste0("libstatlibbackend.", ext)
+}
+
+backend_candidates <- function(cache_roots = backend_cache_roots()) {
   unlist(lapply(cache_roots, function(cache_root) {
-    c(
-      file.path(cache_root, "lib", paste0("libstatlibbackend.", ext)),
-      file.path(cache_root, paste0("libstatlibbackend.", ext))
-    )
+    unlist(lapply(backend_library_basenames(), function(libname) {
+      c(
+        file.path(cache_root, "lib", libname),
+        file.path(cache_root, libname)
+      )
+    }), use.names = FALSE)
   }), use.names = FALSE)
+}
+
+backend_recursive_candidates <- function(cache_roots = backend_cache_roots()) {
+  basenames <- backend_library_basenames()
+  pattern <- paste0("(", paste(gsub("\\.", "\\\\.", basenames), collapse = "|"), ")$")
+
+  unique(unlist(lapply(cache_roots, function(cache_root) {
+    if (!dir.exists(cache_root)) {
+      return(character())
+    }
+    list.files(cache_root, pattern = pattern, recursive = TRUE, full.names = TRUE)
+  }), use.names = FALSE))
 }
 
 backend_path <- function() {
   p <- backend_env_var()
   if (nzchar(p)) return(normalizePath(p, mustWork = FALSE))
 
-  candidates <- backend_candidates()
+  candidates <- c(backend_candidates(), backend_recursive_candidates())
   hit <- candidates[file.exists(candidates)]
   normalizePath(if (length(hit)) hit[[1]] else candidates[[1]], mustWork = FALSE)
 }
@@ -213,6 +238,7 @@ backend_token <- function() {
 backend_platform <- function() {
   sysname <- tolower(Sys.info()[["sysname"]])
   machine <- tolower(Sys.info()[["machine"]])
+  machine <- gsub("-", "_", machine, fixed = TRUE)
 
   os <- switch(
     sysname,
@@ -222,7 +248,7 @@ backend_platform <- function() {
     stop(sprintf("Unsupported OS for backend artifact download: %s", sysname), call. = FALSE)
   )
 
-  arch <- if (machine %in% c("x86_64", "amd64")) {
+  arch <- if (machine %in% c("x86_64", "amd64", "x64")) {
     "x86_64"
   } else if (machine %in% c("arm64", "aarch64")) {
     "arm64"
@@ -250,7 +276,148 @@ github_headers <- function(token = "", accept = "application/vnd.github+json") {
   headers
 }
 
+windows_powershell <- function() {
+  if (.Platform$OS.type != "windows") {
+    return("")
+  }
+
+  ps <- Sys.which("powershell.exe")
+  if (nzchar(ps)) {
+    return(ps)
+  }
+
+  Sys.which("powershell")
+}
+
+windows_ps_quote <- function(x) {
+  sprintf("'%s'", gsub("'", "''", x, fixed = TRUE))
+}
+
+windows_github_fetch_json <- function(url,
+                                      token = "",
+                                      accept = "application/vnd.github+json") {
+  ps <- windows_powershell()
+  if (!nzchar(ps)) {
+    stop("PowerShell is not available", call. = FALSE)
+  }
+
+  script <- tempfile("fastaugsynth-gh-", fileext = ".ps1")
+  json_file <- tempfile("fastaugsynth-gh-json-", fileext = ".json")
+  stderr_file <- tempfile("fastaugsynth-gh-stderr-")
+  on.exit(unlink(c(script, json_file, stderr_file), force = TRUE), add = TRUE)
+
+  lines <- c(
+    "$ErrorActionPreference = 'Stop'",
+    "$headers = @{}",
+    sprintf("$headers['Accept'] = %s", windows_ps_quote(accept)),
+    "$headers['X-GitHub-Api-Version'] = '2022-11-28'"
+  )
+  if (nzchar(token)) {
+    lines <- c(lines, sprintf("$headers['Authorization'] = %s", windows_ps_quote(paste("Bearer", token))))
+  }
+  lines <- c(
+    lines,
+    sprintf("$resp = Invoke-WebRequest -UseBasicParsing -Headers $headers -Uri %s", windows_ps_quote(url)),
+    sprintf(
+      "[System.IO.File]::WriteAllText(%s, $resp.Content, [System.Text.UTF8Encoding]::new($false))",
+      windows_ps_quote(normalizePath(json_file, winslash = "\\", mustWork = FALSE))
+    )
+  )
+  writeLines(lines, script, useBytes = TRUE)
+
+  output <- tryCatch(
+    suppressWarnings(system2(
+      ps,
+      c("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script),
+      stdout = TRUE,
+      stderr = stderr_file
+    )),
+    error = function(e) e
+  )
+  stderr_text <- paste(readLines(stderr_file, warn = FALSE), collapse = "\n")
+  if (inherits(output, "error")) {
+    stop(conditionMessage(output), call. = FALSE)
+  }
+
+  exit_status <- attr(output, "status")
+  if (!is.null(exit_status) && exit_status != 0L) {
+    message <- trimws(stderr_text)
+    if (!nzchar(message)) {
+      message <- "empty response body"
+    }
+    stop(
+      sprintf("PowerShell GitHub request failed (%s): %s", exit_status, message),
+      call. = FALSE
+    )
+  }
+
+  jsonlite::fromJSON(paste(readLines(json_file, warn = FALSE, encoding = "UTF-8"), collapse = "\n"), simplifyVector = TRUE)
+}
+
+windows_github_download_file <- function(url,
+                                         destfile,
+                                         token = "",
+                                         accept = "application/octet-stream") {
+  ps <- windows_powershell()
+  if (!nzchar(ps)) {
+    stop("PowerShell is not available", call. = FALSE)
+  }
+
+  script <- tempfile("fastaugsynth-gh-download-", fileext = ".ps1")
+  stderr_file <- tempfile("fastaugsynth-gh-download-stderr-")
+  on.exit(unlink(c(script, stderr_file), force = TRUE), add = TRUE)
+
+  lines <- c(
+    "$ErrorActionPreference = 'Stop'",
+    "$headers = @{}",
+    sprintf("$headers['Accept'] = %s", windows_ps_quote(accept)),
+    "$headers['X-GitHub-Api-Version'] = '2022-11-28'"
+  )
+  if (nzchar(token)) {
+    lines <- c(lines, sprintf("$headers['Authorization'] = %s", windows_ps_quote(paste("Bearer", token))))
+  }
+  lines <- c(
+    lines,
+    sprintf("Invoke-WebRequest -UseBasicParsing -Headers $headers -Uri %s -OutFile %s",
+            windows_ps_quote(url),
+            windows_ps_quote(normalizePath(destfile, winslash = "\\", mustWork = FALSE)))
+  )
+  writeLines(lines, script, useBytes = TRUE)
+
+  output <- tryCatch(
+    suppressWarnings(system2(
+      ps,
+      c("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script),
+      stdout = TRUE,
+      stderr = stderr_file
+    )),
+    error = function(e) e
+  )
+  stderr_text <- paste(readLines(stderr_file, warn = FALSE), collapse = "\n")
+  if (inherits(output, "error")) {
+    stop(conditionMessage(output), call. = FALSE)
+  }
+
+  exit_status <- attr(output, "status")
+  if (!is.null(exit_status) && exit_status != 0L) {
+    message <- trimws(stderr_text)
+    if (!nzchar(message)) {
+      message <- "empty response body"
+    }
+    stop(
+      sprintf("PowerShell GitHub download failed (%s): %s", exit_status, message),
+      call. = FALSE
+    )
+  }
+
+  invisible(destfile)
+}
+
 github_fetch_json <- function(url, token = "") {
+  if (.Platform$OS.type == "windows" && nzchar(windows_powershell()) && nzchar(token)) {
+    return(windows_github_fetch_json(url, token = token))
+  }
+
   response <- tryCatch(
     curl::curl_fetch_memory(
       url,
@@ -260,6 +427,9 @@ github_fetch_json <- function(url, token = "") {
   )
 
   if (inherits(response, "error")) {
+    if (nzchar(windows_powershell())) {
+      return(windows_github_fetch_json(url, token = token))
+    }
     if (nzchar(backend_gh())) {
       return(jsonlite::fromJSON(gh_api_request(url), simplifyVector = TRUE))
     }
@@ -267,7 +437,10 @@ github_fetch_json <- function(url, token = "") {
   }
 
   if (response$status_code >= 300L) {
-    if (response$status_code %in% c(401L, 404L) && nzchar(backend_gh())) {
+    if (response$status_code %in% c(401L, 403L, 404L) && nzchar(windows_powershell())) {
+      return(windows_github_fetch_json(url, token = token))
+    }
+    if (response$status_code %in% c(401L, 403L, 404L) && nzchar(backend_gh())) {
       return(jsonlite::fromJSON(gh_api_request(url), simplifyVector = TRUE))
     }
     message <- trimws(rawToChar(response$content))
@@ -291,6 +464,10 @@ github_fetch_json <- function(url, token = "") {
 }
 
 github_download_file <- function(url, destfile, token = "", accept = "application/octet-stream") {
+  if (.Platform$OS.type == "windows" && nzchar(windows_powershell()) && nzchar(token)) {
+    return(windows_github_download_file(url, destfile, token = token, accept = accept))
+  }
+
   tryCatch(
     curl::curl_download(
       url = url,
@@ -302,6 +479,9 @@ github_download_file <- function(url, destfile, token = "", accept = "applicatio
       quiet = TRUE
     ),
     error = function(e) {
+      if (nzchar(windows_powershell())) {
+        return(windows_github_download_file(url, destfile, token = token, accept = accept))
+      }
       if (nzchar(backend_gh())) {
         return(gh_api_request(url, accept = NULL, output = destfile))
       }
@@ -321,7 +501,8 @@ backend_install_message <- function() {
 }
 
 backend_find_library <- function(cache_dir) {
-  pattern <- paste0("libstatlibbackend\\.", backend_library_ext(), "$")
+  basenames <- backend_library_basenames()
+  pattern <- paste0("(", paste(gsub("\\.", "\\\\.", basenames), collapse = "|"), ")$")
   matches <- list.files(cache_dir, pattern = pattern, recursive = TRUE, full.names = TRUE)
   if (!length(matches)) {
     stop(
@@ -343,6 +524,49 @@ github_workflow_runs_url <- function(repo, workflow, ref = "", per_page = 50L) {
     url <- paste0(url, "&branch=", utils::URLencode(ref, reserved = TRUE))
   }
   url
+}
+
+backend_extract_artifact_entries <- function(artifacts) {
+  rows <- artifacts$artifacts
+  if (is.null(rows) || !length(rows)) {
+    return(list())
+  }
+
+  if (is.data.frame(rows)) {
+    return(lapply(seq_len(nrow(rows)), function(i) as.list(rows[i, , drop = FALSE])))
+  }
+
+  if (is.list(rows) && !is.null(names(rows)) &&
+      all(c("name", "archive_download_url") %in% names(rows))) {
+    return(list(rows))
+  }
+
+  if (is.list(rows)) {
+    return(rows)
+  }
+
+  list()
+}
+
+backend_artifact_field <- function(entry, field, default = NULL) {
+  value <- entry[[field]]
+  if (is.null(value) || !length(value)) {
+    return(default)
+  }
+  value[[1]]
+}
+
+backend_artifact_expired <- function(entry) {
+  value <- backend_artifact_field(entry, "expired", FALSE)
+  if (is.logical(value)) {
+    return(isTRUE(value))
+  }
+  if (is.numeric(value)) {
+    return(!is.na(value) && value != 0)
+  }
+
+  value_chr <- trimws(as.character(value))
+  nzchar(value_chr) && tolower(value_chr) %in% c("true", "t", "1", "yes")
 }
 
 backend_install <- function(repo = backend_repo(),
@@ -383,12 +607,12 @@ backend_install <- function(repo = backend_repo(),
   )
   artifacts <- github_fetch_json(artifacts_url, token = token)
   wanted_name <- backend_artifact_name()
-  artifact_rows <- artifacts$artifacts[
-    artifacts$artifacts$name == wanted_name & !artifacts$artifacts$expired,
-    ,
-    drop = FALSE
-  ]
-  if (!NROW(artifact_rows)) {
+  artifact_entries <- backend_extract_artifact_entries(artifacts)
+  artifact_rows <- Filter(function(entry) {
+    identical(backend_artifact_field(entry, "name", ""), wanted_name) &&
+      !backend_artifact_expired(entry)
+  }, artifact_entries)
+  if (!length(artifact_rows)) {
     stop(
       sprintf(
         "No artifact named '%s' found in successful run %s for %s on ref '%s'.",
@@ -401,13 +625,18 @@ backend_install <- function(repo = backend_repo(),
     )
   }
 
-  artifact <- artifact_rows[1, , drop = FALSE]
+  artifact <- artifact_rows[[1]]
   zipfile <- tempfile(fileext = ".zip")
   unpack_dir <- tempfile("fastaugsynth-artifact-")
   on.exit(unlink(c(zipfile, unpack_dir), recursive = TRUE, force = TRUE), add = TRUE)
   dir.create(unpack_dir, recursive = TRUE, showWarnings = FALSE)
 
-  github_download_file(artifact$archive_download_url[[1]], zipfile, token = token)
+  github_download_file(
+    backend_artifact_field(artifact, "archive_download_url", ""),
+    zipfile,
+    token = token,
+    accept = "application/vnd.github+json"
+  )
   extracted <- utils::unzip(zipfile, exdir = unpack_dir)
   tarball <- extracted[grepl("\\.tar\\.gz$", extracted)]
   if (!length(tarball)) {
