@@ -384,6 +384,10 @@ windows_github_download_file <- function(url,
 }
 
 github_fetch_json <- function(url, token = "") {
+  if (.Platform$OS.type == "windows" && nzchar(windows_powershell()) && nzchar(token)) {
+    return(windows_github_fetch_json(url, token = token))
+  }
+
   response <- tryCatch(
     curl::curl_fetch_memory(
       url,
@@ -403,10 +407,10 @@ github_fetch_json <- function(url, token = "") {
   }
 
   if (response$status_code >= 300L) {
-    if (response$status_code %in% c(401L, 404L) && nzchar(windows_powershell())) {
+    if (response$status_code %in% c(401L, 403L, 404L) && nzchar(windows_powershell())) {
       return(windows_github_fetch_json(url, token = token))
     }
-    if (response$status_code %in% c(401L, 404L) && nzchar(backend_gh())) {
+    if (response$status_code %in% c(401L, 403L, 404L) && nzchar(backend_gh())) {
       return(jsonlite::fromJSON(gh_api_request(url), simplifyVector = TRUE))
     }
     message <- trimws(rawToChar(response$content))
@@ -430,6 +434,10 @@ github_fetch_json <- function(url, token = "") {
 }
 
 github_download_file <- function(url, destfile, token = "", accept = "application/octet-stream") {
+  if (.Platform$OS.type == "windows" && nzchar(windows_powershell()) && nzchar(token)) {
+    return(windows_github_download_file(url, destfile, token = token, accept = accept))
+  }
+
   tryCatch(
     curl::curl_download(
       url = url,
