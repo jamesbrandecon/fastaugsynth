@@ -276,8 +276,9 @@ windows_github_fetch_json <- function(url,
   }
 
   script <- tempfile("fastaugsynth-gh-", fileext = ".ps1")
+  json_file <- tempfile("fastaugsynth-gh-json-", fileext = ".json")
   stderr_file <- tempfile("fastaugsynth-gh-stderr-")
-  on.exit(unlink(c(script, stderr_file), force = TRUE), add = TRUE)
+  on.exit(unlink(c(script, json_file, stderr_file), force = TRUE), add = TRUE)
 
   lines <- c(
     "$ErrorActionPreference = 'Stop'",
@@ -291,7 +292,10 @@ windows_github_fetch_json <- function(url,
   lines <- c(
     lines,
     sprintf("$resp = Invoke-WebRequest -UseBasicParsing -Headers $headers -Uri %s", windows_ps_quote(url)),
-    "[Console]::Out.Write($resp.Content)"
+    sprintf(
+      "[System.IO.File]::WriteAllText(%s, $resp.Content, [System.Text.UTF8Encoding]::new($false))",
+      windows_ps_quote(normalizePath(json_file, winslash = "\\", mustWork = FALSE))
+    )
   )
   writeLines(lines, script, useBytes = TRUE)
 
@@ -321,7 +325,7 @@ windows_github_fetch_json <- function(url,
     )
   }
 
-  jsonlite::fromJSON(paste(output, collapse = "\n"), simplifyVector = TRUE)
+  jsonlite::fromJSON(paste(readLines(json_file, warn = FALSE, encoding = "UTF-8"), collapse = "\n"), simplifyVector = TRUE)
 }
 
 windows_github_download_file <- function(url,
