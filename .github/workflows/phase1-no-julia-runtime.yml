@@ -141,7 +141,7 @@ jobs:
   verify-without-julia-windows:
     runs-on: windows-latest
     needs: build-backend-windows
-    if: ${{ (github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == 'windows') && (needs.build-backend-windows.result == 'success' || needs.build-backend-windows.result == 'skipped') }}
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == 'windows') && (needs.build-backend-windows.result == 'success' || needs.build-backend-windows.result == 'skipped') }}
     steps:
       - uses: actions/checkout@v4
       - name: Block Julia execution in runtime job
@@ -226,7 +226,7 @@ jobs:
   verify-backend-install-windows:
     runs-on: windows-latest
     needs: build-backend-windows
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.target == 'windows' && (needs.build-backend-windows.result == 'success' || needs.build-backend-windows.result == 'skipped') }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.target == 'windows' && (needs.build-backend-windows.result == 'success' || needs.build-backend-windows.result == 'skipped') }}
     steps:
       - uses: actions/checkout@v4
       - name: Setup R
