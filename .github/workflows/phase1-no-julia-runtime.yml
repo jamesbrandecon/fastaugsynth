@@ -192,11 +192,13 @@ jobs:
           if (-not $dll) {
             throw "libstatlibbackend.dll not found"
           }
+          $rlib = $env:R_LIBS_USER -replace '\\', '/'
           $env:FASTAUGSYNTH_BACKEND_LIB = $dll
-          cmd /c "R CMD INSTALL -l ""$env:R_LIBS_USER"" ."
+          cmd /c "R CMD INSTALL -l ""$rlib"" ."
           $script = @'
-          .libPaths(c(Sys.getenv("R_LIBS_USER"), .libPaths()))
-          library(fastaugsynth)
+          pkg_lib <- normalizePath(Sys.getenv("R_LIBS_USER"), winslash = "/", mustWork = TRUE)
+          print(list.files(pkg_lib))
+          library(fastaugsynth, lib.loc = pkg_lib)
           set.seed(42)
           X <- cbind(1, matrix(rnorm(400), ncol = 4))
           y <- X %*% c(1, 2, 3, 4, 5) + rnorm(100)
@@ -241,7 +243,8 @@ jobs:
       - name: Install package
         shell: pwsh
         run: |
-          cmd /c "R CMD INSTALL -l ""$env:R_LIBS_USER"" ."
+          $rlib = $env:R_LIBS_USER -replace '\\', '/'
+          cmd /c "R CMD INSTALL -l ""$rlib"" ."
       - name: Backend install smoke from latest successful branch artifact
         shell: pwsh
         env:
@@ -250,8 +253,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $script = @'
-          .libPaths(c(Sys.getenv("R_LIBS_USER"), .libPaths()))
-          library(fastaugsynth)
+          pkg_lib <- normalizePath(Sys.getenv("R_LIBS_USER"), winslash = "/", mustWork = TRUE)
+          print(list.files(pkg_lib))
+          library(fastaugsynth, lib.loc = pkg_lib)
           ref <- Sys.getenv("TEST_REF")
           fastaugsynth::backend_install(
             repo = "jamesbrandecon/fastaugsynth",
