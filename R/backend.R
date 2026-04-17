@@ -60,11 +60,23 @@ backend_candidates <- function(cache_roots = backend_cache_roots()) {
   }), use.names = FALSE)
 }
 
+backend_recursive_candidates <- function(cache_roots = backend_cache_roots()) {
+  basenames <- backend_library_basenames()
+  pattern <- paste0("(", paste(gsub("\\.", "\\\\.", basenames), collapse = "|"), ")$")
+
+  unique(unlist(lapply(cache_roots, function(cache_root) {
+    if (!dir.exists(cache_root)) {
+      return(character())
+    }
+    list.files(cache_root, pattern = pattern, recursive = TRUE, full.names = TRUE)
+  }), use.names = FALSE))
+}
+
 backend_path <- function() {
   p <- backend_env_var()
   if (nzchar(p)) return(normalizePath(p, mustWork = FALSE))
 
-  candidates <- backend_candidates()
+  candidates <- c(backend_candidates(), backend_recursive_candidates())
   hit <- candidates[file.exists(candidates)]
   normalizePath(if (length(hit)) hit[[1]] else candidates[[1]], mustWork = FALSE)
 }
