@@ -194,7 +194,8 @@ jobs:
           }
           $rlib = $env:R_LIBS_USER -replace '\\', '/'
           $env:FASTAUGSYNTH_BACKEND_LIB = $dll
-          cmd /c "R CMD INSTALL -l ""$rlib"" ."
+          & R CMD INSTALL "--library=$rlib" .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $script = @'
           pkg_lib <- normalizePath(Sys.getenv("R_LIBS_USER"), winslash = "/", mustWork = TRUE)
           print(list.files(pkg_lib))
@@ -244,7 +245,8 @@ jobs:
         shell: pwsh
         run: |
           $rlib = $env:R_LIBS_USER -replace '\\', '/'
-          cmd /c "R CMD INSTALL -l ""$rlib"" ."
+          & R CMD INSTALL "--library=$rlib" .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Backend install smoke from latest successful branch artifact
         shell: pwsh
         env:
