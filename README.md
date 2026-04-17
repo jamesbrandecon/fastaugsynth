@@ -13,13 +13,11 @@ Current surface:
 - `augsynth()`
 - `summary.augsynth()` for jackknife and conformal inference
 - `predict.augsynth()`
-- low-level dense regression helpers `jols_fit_xy()` and `jridge_fit_xy()`
 
 Not implemented:
 
 - multisynth / staggered-adoption paths
 - multi-outcome support
-- broad “general econometrics toolbox” ambitions
 
 ## Installation
 
@@ -27,8 +25,6 @@ The package name and GitHub repo slug are both `fastaugsynth`.
 
 ```r
 if (!requireNamespace("remotes", quietly = TRUE)) install.packages("remotes")
-
-Sys.setenv(GITHUB_PAT = "<token with repo access>")
 
 remotes::install_github(
   "jamesbrandecon/fastaugsynth"
@@ -41,22 +37,32 @@ if (!fastaugsynth::backend_status()$exists) {
 }
 ```
 
+For the public repo, `remotes::install_github()` should not require a special PAT.
+
 The repo root is the R package root. The Julia backend, docs, and temp benchmarking material stay in the repo but are excluded from the package build.
 
-If you are testing a non-default branch, set the backend ref explicitly before install or before `backend_install()`:
+`backend_install()` downloads the prebuilt backend artifact for your platform from this repository's GitHub Actions runs.
+
+If you are testing a non-default branch, install that branch and point backend installation at the same ref:
 
 ```r
+remotes::install_github("jamesbrandecon/fastaugsynth", ref = "<branch-name>")
 Sys.setenv(FASTAUGSYNTH_BACKEND_REF = "<branch-name>")
+fastaugsynth::backend_install(force = TRUE)
 ```
 
-Artifact lookup uses:
+Useful environment variables:
 
 - `FASTAUGSYNTH_BACKEND_LIB`
-- `FASTAUGSYNTH_GITHUB_PAT`
 - `FASTAUGSYNTH_BACKEND_REF`
 - `FASTAUGSYNTH_JULIA_THREADS`
 
-The package will also use `GITHUB_PAT`, `gh auth token`, or `gitcreds` when needed.
+If GitHub asks for authentication while downloading the backend artifact, the package will also use these optional auth sources:
+
+- `FASTAUGSYNTH_GITHUB_PAT`
+- `GITHUB_PAT`
+- `gh auth token`
+- `gitcreds`
 
 ## Quick Start
 
