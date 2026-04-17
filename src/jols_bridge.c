@@ -120,12 +120,156 @@ static void set_windows_error_message(DWORD error_code) {
     status--;
   }
 }
+
+static void backend_dirname(const char* path, char* out, size_t out_size) {
+  size_t len;
+
+  if (out_size == 0) {
+    return;
+  }
+
+  out[0] = '\0';
+  if (path == NULL || path[0] == '\0') {
+    snprintf(out, out_size, ".");
+    return;
+  }
+
+  len = strlen(path);
+  while (len > 0 && (path[len - 1] == '\\' || path[len - 1] == '/')) {
+    len--;
+  }
+  while (len > 0 && path[len - 1] != '\\' && path[len - 1] != '/') {
+    len--;
+  }
+  while (len > 1 && (path[len - 1] == '\\' || path[len - 1] == '/')) {
+    len--;
+  }
+
+  if (len == 0) {
+    snprintf(out, out_size, ".");
+    return;
+  }
+
+  if (len >= out_size) {
+    len = out_size - 1;
+  }
+  memcpy(out, path, len);
+  out[len] = '\0';
+}
+
+static void backend_join_path(const char* left, const char* right, char* out, size_t out_size) {
+  size_t len;
+
+  if (out_size == 0) {
+    return;
+  }
+
+  if (left == NULL || left[0] == '\0') {
+    snprintf(out, out_size, "%s", right != NULL ? right : "");
+    return;
+  }
+  if (right == NULL || right[0] == '\0') {
+    snprintf(out, out_size, "%s", left);
+    return;
+  }
+
+  len = strlen(left);
+  if (left[len - 1] == '\\' || left[len - 1] == '/') {
+    snprintf(out, out_size, "%s%s", left, right);
+  } else {
+    snprintf(out, out_size, "%s\\%s", left, right);
+  }
+}
+
+static int backend_is_directory(const char* path) {
+  DWORD attrs;
+
+  if (path == NULL || path[0] == '\0') {
+    return 0;
+  }
+
+  attrs = GetFileAttributesA(path);
+  return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+static void backend_prepend_directory_to_path(const char* dir) {
+  DWORD needed;
+  char* current_path = NULL;
+  char* new_path = NULL;
+
+  if (!backend_is_directory(dir)) {
+    return;
+  }
+
+  needed = GetEnvironmentVariableA("PATH", NULL, 0);
+  if (needed > 0) {
+    current_path = (char*)malloc((size_t)needed);
+    if (current_path == NULL) {
+      return;
+    }
+    if (GetEnvironmentVariableA("PATH", current_path, needed) == 0) {
+      free(current_path);
+      current_path = NULL;
+      needed = 0;
+    }
+  }
+
+  if (current_path != NULL && strstr(current_path, dir) != NULL) {
+    free(current_path);
+    return;
+  }
+
+  if (current_path != NULL && current_path[0] != '\0') {
+    size_t new_len = strlen(dir) + 1 + strlen(current_path) + 1;
+    new_path = (char*)malloc(new_len);
+    if (new_path != NULL) {
+      snprintf(new_path, new_len, "%s;%s", dir, current_path);
+      SetEnvironmentVariableA("PATH", new_path);
+      free(new_path);
+    }
+    free(current_path);
+    return;
+  }
+
+  SetEnvironmentVariableA("PATH", dir);
+  if (current_path != NULL) {
+    free(current_path);
+  }
+}
+
+static void backend_prepare_windows_search_path(const char* libpath) {
+  char lib_dir[4096];
+  char root_dir[4096];
+  char candidate[4096];
+  char parent_candidate[4096];
+
+  backend_dirname(libpath, lib_dir, sizeof(lib_dir));
+  backend_prepend_directory_to_path(lib_dir);
+
+  backend_join_path(lib_dir, "julia", candidate, sizeof(candidate));
+  backend_prepend_directory_to_path(candidate);
+
+  backend_dirname(lib_dir, root_dir, sizeof(root_dir));
+
+  backend_join_path(root_dir, "lib", candidate, sizeof(candidate));
+  backend_prepend_directory_to_path(candidate);
+
+  backend_join_path(candidate, "julia", parent_candidate, sizeof(parent_candidate));
+  backend_prepend_directory_to_path(parent_candidate);
+
+  backend_join_path(root_dir, "bin", candidate, sizeof(candidate));
+  backend_prepend_directory_to_path(candidate);
+
+  backend_join_path(root_dir, "julia", candidate, sizeof(candidate));
+  backend_prepend_directory_to_path(candidate);
+}
 #endif
 
 static backend_lib_handle_t backend_dlopen(const char* libpath) {
   backend_error_buffer[0] = '\0';
 #ifdef _WIN32
-  backend_handle = LoadLibraryA(libpath);
+  backend_prepare_windows_search_path(libpath);
+  backend_handle = LoadLibraryExA(libpath, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
   if (backend_handle == NULL) {
     set_windows_error_message(GetLastError());
   }
