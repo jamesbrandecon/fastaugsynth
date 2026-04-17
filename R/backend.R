@@ -213,6 +213,7 @@ backend_token <- function() {
 backend_platform <- function() {
   sysname <- tolower(Sys.info()[["sysname"]])
   machine <- tolower(Sys.info()[["machine"]])
+  machine <- gsub("-", "_", machine, fixed = TRUE)
 
   os <- switch(
     sysname,
@@ -222,7 +223,7 @@ backend_platform <- function() {
     stop(sprintf("Unsupported OS for backend artifact download: %s", sysname), call. = FALSE)
   )
 
-  arch <- if (machine %in% c("x86_64", "amd64")) {
+  arch <- if (machine %in% c("x86_64", "amd64", "x64")) {
     "x86_64"
   } else if (machine %in% c("arm64", "aarch64")) {
     "arm64"
