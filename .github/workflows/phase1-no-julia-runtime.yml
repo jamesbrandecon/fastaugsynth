@@ -146,7 +146,7 @@ jobs:
   verify-without-julia-windows:
     runs-on: windows-latest
     needs: build-backend-windows
-    if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.target == 'all' || (inputs.target == 'windows' && inputs.windows_artifact_run_id == '')) && (needs.build-backend-windows.result == 'success' || needs.build-backend-windows.result == 'skipped') }}
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == 'windows') && (needs.build-backend-windows.result == 'success' || needs.build-backend-windows.result == 'skipped') }}
     steps:
       - uses: actions/checkout@v4
       - name: Block Julia execution in runtime job
@@ -193,9 +193,11 @@ jobs:
       - name: Install and test R package using backend (without Julia)
         shell: pwsh
         run: |
-          $dll = Get-ChildItem -Path (Join-Path $env:USERPROFILE ".cache\\fastaugsynth\\backend") -Filter libstatlibbackend.dll -Recurse | Select-Object -First 1 -ExpandProperty FullName
+          $dll = Get-ChildItem -Path (Join-Path $env:USERPROFILE ".cache\\fastaugsynth\\backend") -Recurse -File |
+            Where-Object { $_.Name -in @("libstatlibbackend.dll", "statlibbackend.dll") } |
+            Select-Object -First 1 -ExpandProperty FullName
           if (-not $dll) {
-            throw "libstatlibbackend.dll not found"
+            throw "Backend DLL not found"
           }
           $env:FASTAUGSYNTH_BACKEND_LIB = $dll
           $install = @'
