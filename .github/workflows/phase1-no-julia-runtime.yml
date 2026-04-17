@@ -170,7 +170,13 @@ jobs:
         run: |
           $cache = Join-Path $env:USERPROFILE ".cache\\fastaugsynth\\backend"
           New-Item -ItemType Directory -Force -Path $cache | Out-Null
-          & tar.exe -xzf "backend-artifact/statlibbackend-windows-x86_64.tar.gz" -C $cache
+          $script = @'
+          args <- commandArgs(trailingOnly = TRUE)
+          utils::untar(args[[1]], exdir = args[[2]])
+          '@
+          $path = Join-Path $env:RUNNER_TEMP "untar-backend-artifact.R"
+          $script | Set-Content -Path $path -Encoding ASCII
+          Rscript $path "backend-artifact/statlibbackend-windows-x86_64.tar.gz" $cache
           Get-ChildItem $cache -Recurse | Select-Object FullName, Length
       - name: Install and test R package using backend (without Julia)
         shell: pwsh
@@ -180,7 +186,7 @@ jobs:
             throw "libstatlibbackend.dll not found"
           }
           $env:FASTAUGSYNTH_BACKEND_LIB = $dll
-          cmd /c "R CMD INSTALL ."
+          cmd /c "R CMD INSTALL -l ""$env:R_LIBS_USER"" ."
           $script = @'
           library(fastaugsynth)
           set.seed(42)
@@ -227,7 +233,7 @@ jobs:
       - name: Install package
         shell: pwsh
         run: |
-          cmd /c "R CMD INSTALL ."
+          cmd /c "R CMD INSTALL -l ""$env:R_LIBS_USER"" ."
       - name: Backend install smoke from latest successful branch artifact
         shell: pwsh
         env:
