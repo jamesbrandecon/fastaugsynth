@@ -526,6 +526,49 @@ github_workflow_runs_url <- function(repo, workflow, ref = "", per_page = 50L) {
   url
 }
 
+backend_extract_artifact_entries <- function(artifacts) {
+  rows <- artifacts$artifacts
+  if (is.null(rows) || !length(rows)) {
+    return(list())
+  }
+
+  if (is.data.frame(rows)) {
+    return(lapply(seq_len(nrow(rows)), function(i) as.list(rows[i, , drop = FALSE])))
+  }
+
+  if (is.list(rows) && !is.null(names(rows)) &&
+      all(c("name", "archive_download_url") %in% names(rows))) {
+    return(list(rows))
+  }
+
+  if (is.list(rows)) {
+    return(rows)
+  }
+
+  list()
+}
+
+backend_artifact_field <- function(entry, field, default = NULL) {
+  value <- entry[[field]]
+  if (is.null(value) || !length(value)) {
+    return(default)
+  }
+  value[[1]]
+}
+
+backend_artifact_expired <- function(entry) {
+  value <- backend_artifact_field(entry, "expired", FALSE)
+  if (is.logical(value)) {
+    return(isTRUE(value))
+  }
+  if (is.numeric(value)) {
+    return(!is.na(value) && value != 0)
+  }
+
+  value_chr <- trimws(as.character(value))
+  nzchar(value_chr) && tolower(value_chr) %in% c("true", "t", "1", "yes")
+}
+
 backend_install <- function(repo = backend_repo(),
                             ref = backend_ref(),
                             sha = backend_sha(),
@@ -564,12 +607,12 @@ backend_install <- function(repo = backend_repo(),
   )
   artifacts <- github_fetch_json(artifacts_url, token = token)
   wanted_name <- backend_artifact_name()
-  artifact_rows <- artifacts$artifacts[
-    artifacts$artifacts$name == wanted_name & !artifacts$artifacts$expired,
-    ,
-    drop = FALSE
-  ]
-  if (!NROW(artifact_rows)) {
+  artifact_entries <- backend_extract_artifact_entries(artifacts)
+  artifact_rows <- Filter(function(entry) {
+    identical(backend_artifact_field(entry, "name", ""), wanted_name) &&
+      !backend_artifact_expired(entry)
+  }, artifact_entries)
+  if (!length(artifact_rows)) {
     stop(
       sprintf(
         "No artifact named '%s' found in successful run %s for %s on ref '%s'.",
@@ -582,14 +625,14 @@ backend_install <- function(repo = backend_repo(),
     )
   }
 
-  artifact <- artifact_rows[1, , drop = FALSE]
+  artifact <- artifact_rows[[1]]
   zipfile <- tempfile(fileext = ".zip")
   unpack_dir <- tempfile("fastaugsynth-artifact-")
   on.exit(unlink(c(zipfile, unpack_dir), recursive = TRUE, force = TRUE), add = TRUE)
   dir.create(unpack_dir, recursive = TRUE, showWarnings = FALSE)
 
   github_download_file(
-    artifact$archive_download_url[[1]],
+    backend_artifact_field(artifact, "archive_download_url", ""),
     zipfile,
     token = token,
     accept = "application/vnd.github+json"
