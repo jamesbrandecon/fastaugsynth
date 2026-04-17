@@ -562,7 +562,12 @@ backend_install <- function(repo = backend_repo(),
   on.exit(unlink(c(zipfile, unpack_dir), recursive = TRUE, force = TRUE), add = TRUE)
   dir.create(unpack_dir, recursive = TRUE, showWarnings = FALSE)
 
-  github_download_file(artifact$archive_download_url[[1]], zipfile, token = token)
+  github_download_file(
+    artifact$archive_download_url[[1]],
+    zipfile,
+    token = token,
+    accept = "application/vnd.github+json"
+  )
   extracted <- utils::unzip(zipfile, exdir = unpack_dir)
   tarball <- extracted[grepl("\\.tar\\.gz$", extracted)]
   if (!length(tarball)) {
