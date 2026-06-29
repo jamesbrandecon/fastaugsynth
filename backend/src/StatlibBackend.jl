@@ -1109,6 +1109,129 @@ function _conformal_build_cache(X::AbstractMatrix{Float64},
     )
 end
 
+@inline function _can_use_pointwise_conformal_stats(ridge::Bool,
+                                                    scm::Bool,
+                                                    V::Union{AbstractMatrix{Float64}, Nothing},
+                                                    fixedeff::Bool)
+    !ridge && scm && V === nothing && !fixedeff
+end
+
+function _pointwise_conformal_stats(X::AbstractMatrix{Float64},
+                                    y::AbstractMatrix{Float64},
+                                    trt::AbstractVector{Float64})
+    if size(y, 1) != size(X, 1)
+        error("X and y must have matching row counts")
+    end
+    if size(y, 2) <= 0
+        error("y must contain post-treatment columns")
+    end
+
+    n = size(X, 1)
+    if length(trt) != n
+        error("trt must have one entry per row of X/y")
+    end
+
+    treated = trt .> 0.5
+    control = .!treated
+    if count(treated) == 0
+        error("No treated units found")
+    end
+    if count(control) == 0
+        error("No control units found")
+    end
+
+    control_idx = findall(control)
+    treated_idx = findall(treated)
+
+    X_control = X[control_idx, :]
+    X_means = vec(mean(X_control; dims = 1))
+    X0 = X_control .- transpose(X_means)
+    x1 = vec(mean(X[treated_idx, :]; dims = 1)) .- X_means
+
+    y_control = y[control_idx, :]
+    y_means = vec(mean(y_control; dims = 1))
+    y0 = y_control .- transpose(y_means)
+    y1 = vec(mean(y[treated_idx, :]; dims = 1)) .- y_means
+
+    (
+        X0 = X0,
+        y0 = y0,
+        x1 = x1,
+        y1 = y1,
+        gram = Matrix(X0 * transpose(X0)),
+        q_base = -(X0 * x1),
+        control_idx = control_idx,
+        treated_idx = treated_idx,
+        t0 = size(X, 2),
+        tpost = size(y, 2),
+        n0 = length(control_idx)
+    )
+end
+
+function _pointwise_conformal_cache(stats::NamedTuple, post_index::Int)
+    if post_index < 1 || post_index > stats.tpost
+        error("post_index out of range")
+    end
+
+    shift_feature = copy(@view(stats.y0[:, post_index]))
+    gram = copy(stats.gram)
+    BLAS.ger!(1.0, shift_feature, shift_feature, gram)
+
+    q_base = copy(stats.q_base)
+    @. q_base -= shift_feature * stats.y1[post_index]
+
+    if stats.tpost == 1
+        y0 = zeros(Float64, stats.n0, 1)
+        y1 = zeros(Float64, 1)
+    else
+        y0 = Matrix{Float64}(undef, stats.n0, stats.tpost - 1)
+        col_out = 1
+        @inbounds for col in 1:stats.tpost
+            if col == post_index
+                continue
+            end
+            y0[:, col_out] .= @view stats.y0[:, col]
+            col_out += 1
+        end
+        y1 = Vector{Float64}(undef, stats.tpost - 1)
+        col_out = 1
+        @inbounds for col in 1:stats.tpost
+            if col == post_index
+                continue
+            end
+            y1[col_out] = stats.y1[col]
+            col_out += 1
+        end
+    end
+
+    X0 = hcat(stats.X0, shift_feature)
+    (
+        X0 = X0,
+        X0_raw = X0,
+        y0 = y0,
+        x1 = vcat(stats.x1, stats.y1[post_index]),
+        y1 = y1,
+        gram = gram,
+        q_base = q_base,
+        shift_feature = shift_feature,
+        shift_cols = [stats.t0 + 1],
+        control_idx = stats.control_idx,
+        treated_idx = stats.treated_idx,
+        t0 = stats.t0 + 1,
+        tpost = size(y0, 2),
+        n0 = stats.n0,
+        direct_resids = true
+    )
+end
+
+@inline function _placeholder_X(cache::NamedTuple)
+    Matrix{Float64}(undef, 0, cache.t0)
+end
+
+@inline function _placeholder_y(cache::NamedTuple)
+    Matrix{Float64}(undef, 0, cache.tpost)
+end
+
 function _fit_from_conformal_cache(cache,
                                   h0::Float64;
                                   init_weights::Union{AbstractVector{Float64}, Nothing} = nothing)
@@ -1127,6 +1250,21 @@ function _fit_from_conformal_cache(cache,
 
     syn = _solve_simplex_qp_warm(cache.gram, q; init = init)
     weights = copy(syn)
+    if :direct_resids in propertynames(cache)
+        return (
+            weights = reshape(weights, :, 1),
+            syn = reshape(syn, :, 1),
+            mhat = Float64[],
+            lambda = NaN,
+            l2_imbalance = NaN,
+            scaled_l2_imbalance = NaN,
+            t0 = cache.t0,
+            tpost = cache.tpost,
+            control_idx = cache.control_idx,
+            treated_idx = cache.treated_idx
+        )
+    end
+
     m1_pre = vec(weights' * cache.X0_raw)
     m1_post = vec(weights' * cache.y0)
 
@@ -1145,11 +1283,24 @@ function _fit_from_conformal_cache(cache,
 end
 
 function _conformal_resids_from_cache(cache,
-                                     X::AbstractMatrix{Float64},
-                                     y::AbstractMatrix{Float64},
+                                     X,
+                                     y,
                                      fit::NamedTuple,
                                      h0::Float64)
     w = vec(fit.weights)
+    if :direct_resids in propertynames(cache)
+        resids = vcat(
+            cache.x1 .- vec(transpose(cache.X0_raw) * w),
+            cache.y1 .- vec(transpose(cache.y0) * w)
+        )
+        if h0 != 0.0
+            @inbounds for idx in cache.shift_cols
+                resids[idx] -= h0
+            end
+        end
+        return resids
+    end
+
     mhat = fit.mhat
     t0 = fit.t0
     tpost = fit.tpost
@@ -2212,6 +2363,8 @@ function _conformal!(X::AbstractMatrix{Float64}, y::AbstractMatrix{Float64},
     # work still scales with ns.
     use_outer_threads = tpost > 1 && nthreads > 1 && type != 0
     use_inner_threads = type == 0 && nthreads > 1 && ns >= 500
+    use_pointwise_stats = _can_use_pointwise_conformal_stats(ridge, scm, V, fixedeff)
+    pointwise_stats = use_pointwise_stats ? _pointwise_conformal_stats(X, y, trt) : nothing
     if use_outer_threads
         lo_out = zeros(Float64, tpost)
         hi_out = zeros(Float64, tpost)
@@ -2225,29 +2378,39 @@ function _conformal!(X::AbstractMatrix{Float64}, y::AbstractMatrix{Float64},
             Xj_thread = xj_pool[tid]
             yj_thread = yj_pool[tid]
 
-            Xj_thread[:, 1:t0] .= X
-            @views Xj_thread[:, t0 + 1] .= y[:, j]
-
-            if j == 1
-                @views yj_thread[:, 1:(tpost - 1)] .= y[:, 2:tpost]
-            elseif j == tpost
-                @views yj_thread[:, 1:(tpost - 1)] .= y[:, 1:(tpost - 1)]
+            Xj_eval, yj_eval, conf_cache = if use_pointwise_stats
+                cache = _pointwise_conformal_cache(pointwise_stats, j)
+                (_placeholder_X(cache), _placeholder_y(cache), cache)
             else
-                @views yj_thread[:, 1:(j - 1)] .= y[:, 1:(j - 1)]
-                @views yj_thread[:, j:(tpost - 1)] .= y[:, (j + 1):tpost]
-            end
+                Xj_thread[:, 1:t0] .= X
+                @views Xj_thread[:, t0 + 1] .= y[:, j]
 
-            conf_cache = _conformal_build_cache(
-                Xj_thread, yj_thread, trt;
-                V = V, fixedeff = fixedeff
-            )
+                if j == 1
+                    @views yj_thread[:, 1:(tpost - 1)] .= y[:, 2:tpost]
+                elseif j == tpost
+                    @views yj_thread[:, 1:(tpost - 1)] .= y[:, 1:(tpost - 1)]
+                else
+                    @views yj_thread[:, 1:(j - 1)] .= y[:, 1:(j - 1)]
+                    @views yj_thread[:, j:(tpost - 1)] .= y[:, (j + 1):tpost]
+                end
+
+                cache = if !ridge && scm
+                    _conformal_build_cache(
+                        Xj_thread, yj_thread, trt;
+                        V = V, fixedeff = fixedeff
+                    )
+                else
+                    nothing
+                end
+                (Xj_thread, yj_thread, cache)
+            end
 
             grid = collect(
                 range(base_att[t0 + j] - 2 * post_sd, stop = base_att[t0 + j] + 2 * post_sd, length = grid_size)
             )
 
             lo, hi, pv, _ = _compute_permute_ci(
-                Xj_thread, yj_thread, trt, grid,
+                Xj_eval, yj_eval, trt, grid,
                 1, alpha, type, q, ns,
                 ridge, scm, lambda;
                 init_weights = base_weights,
@@ -2269,31 +2432,41 @@ function _conformal!(X::AbstractMatrix{Float64}, y::AbstractMatrix{Float64},
         ci_weights = base_weights
         final_weights = ci_weights
         for j in 1:tpost
-            Xj[:, 1:t0] .= X
-            @views Xj[:, t0 + 1] .= y[:, j]
-            if tpost > 1
-                if j == 1
-                    @views yj[:, 1:(tpost - 1)] .= y[:, 2:tpost]
-                elseif j == tpost
-                    @views yj[:, 1:(tpost - 1)] .= y[:, 1:(tpost - 1)]
-                else
-                    @views yj[:, 1:(j - 1)] .= y[:, 1:(j - 1)]
-                    @views yj[:, j:(tpost - 1)] .= y[:, (j + 1):tpost]
-                end
+            Xj_eval, yj_eval, conf_cache = if use_pointwise_stats
+                cache = _pointwise_conformal_cache(pointwise_stats, j)
+                (_placeholder_X(cache), _placeholder_y(cache), cache)
             else
-                fill!(yj, 1.0)
-            end
+                Xj[:, 1:t0] .= X
+                @views Xj[:, t0 + 1] .= y[:, j]
+                if tpost > 1
+                    if j == 1
+                        @views yj[:, 1:(tpost - 1)] .= y[:, 2:tpost]
+                    elseif j == tpost
+                        @views yj[:, 1:(tpost - 1)] .= y[:, 1:(tpost - 1)]
+                    else
+                        @views yj[:, 1:(j - 1)] .= y[:, 1:(j - 1)]
+                        @views yj[:, j:(tpost - 1)] .= y[:, (j + 1):tpost]
+                    end
+                else
+                    fill!(yj, 1.0)
+                end
 
-            conf_cache = _conformal_build_cache(
-                Xj, yj, trt;
-                V = V, fixedeff = fixedeff
-            )
+                cache = if !ridge && scm
+                    _conformal_build_cache(
+                        Xj, yj, trt;
+                        V = V, fixedeff = fixedeff
+                    )
+                else
+                    nothing
+                end
+                (Xj, yj, cache)
+            end
 
             grid = collect(
                 range(base_att[t0 + j] - 2 * post_sd, stop = base_att[t0 + j] + 2 * post_sd, length = grid_size)
             )
             lo, hi, pv, ci_weights = _compute_permute_ci(
-                Xj, yj, trt, grid,
+                Xj_eval, yj_eval, trt, grid,
                 1, alpha, type, q, ns,
                 ridge, scm, lambda;
                 init_weights = ci_weights,

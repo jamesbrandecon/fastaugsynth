@@ -2,12 +2,12 @@
 "small","Small
 20 donors, 40 pre, 20 post","fastaugsynth",1,0.006,20,40,20
 "small","Small
-20 donors, 40 pre, 20 post","augsynth",1,8.78,20,40,20
+20 donors, 40 pre, 20 post","augsynth",1,8.404,20,40,20
 "medium","Medium
-40 donors, 80 pre, 40 post","fastaugsynth",1,0.081999999999999,40,80,40
+40 donors, 80 pre, 40 post","fastaugsynth",1,0.011000000000001,40,80,40
 "medium","Medium
-40 donors, 80 pre, 40 post","augsynth",1,23.674,40,80,40
+40 donors, 80 pre, 40 post","augsynth",1,22.854,40,80,40
 "large","Large
-140 donors, 180 pre, 90 post","fastaugsynth",1,0.359999999999999,140,180,90
+140 donors, 180 pre, 90 post","fastaugsynth",1,0.233999999999995,140,180,90
 "large","Large
-140 donors, 180 pre, 90 post","augsynth",1,118.358,140,180,90
+140 donors, 180 pre, 90 post","augsynth",1,113.645,140,180,90

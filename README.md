@@ -99,13 +99,13 @@ The package story is simplest in pictures. This donor-sweep benchmark fixes `180
 
 This figure covers estimation and jackknife only; it does not include conformal inference.
 
-On that donor sweep, the jackknife inference call currently ranges from about `4.2 ms` to `10.9 ms` for `fastaugsynth` versus about `81.7 ms` to `347.3 ms` for upstream `augsynth`.
+On that donor sweep, the jackknife inference call currently ranges from about `4.2 ms` to `23.6 ms` for `fastaugsynth` versus about `81.6 ms` to `332.0 ms` for upstream `augsynth`.
 
 A separate conformal-only comparison benchmarks direct `summary.augsynth(..., inf_type = "conformal")` calls on three simulated panels:
 
 ![Conformal benchmark](docs/figures/fastaugsynth_conformal_compare.png)
 
-On those three cases, `fastaugsynth` currently takes about `6 ms`, `82 ms`, and `360 ms`, versus about `8.78 s`, `23.7 s`, and `118.4 s` for upstream `augsynth`.
+On those three cases, `fastaugsynth` currently takes about `6 ms`, `11 ms`, and `234 ms`, versus about `8.40 s`, `22.9 s`, and `113.6 s` for upstream `augsynth`.
 
 Within `fastaugsynth` on that larger case, the isolated joint multi-post `iid` kernel is about `48.4 ms` on `1` Julia thread and about `12.8 ms` on `6` Julia threads.
 

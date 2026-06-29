@@ -376,11 +376,23 @@ end
     yj = @view(y[:, 2:end])
 
     cache = StatlibBackend._conformal_build_cache(Xj, yj, trt)
+    stats = StatlibBackend._pointwise_conformal_stats(X, y, trt)
+    fast_cache = StatlibBackend._pointwise_conformal_cache(stats, j)
+
+    @test maximum(abs.(fast_cache.gram .- cache.gram)) < 1e-10
+    @test maximum(abs.(fast_cache.q_base .- cache.q_base)) < 1e-10
+    @test maximum(abs.(fast_cache.shift_feature .- cache.shift_feature)) < 1e-10
+    @test maximum(abs.(fast_cache.X0_raw .- cache.X0_raw)) < 1e-10
+    @test maximum(abs.(fast_cache.x1 .- cache.x1)) < 1e-10
+
     fit = StatlibBackend._fit_from_conformal_cache(cache, 0.0)
     resids = StatlibBackend._conformal_resids_from_cache(cache, Xj, yj, fit, 0.0)
+    fast_fit = StatlibBackend._fit_from_conformal_cache(fast_cache, 0.0)
+    fast_resids = StatlibBackend._conformal_resids_from_cache(fast_cache, nothing, nothing, fast_fit, 0.0)
 
     @test length(resids) == size(Xj, 2) + size(yj, 2)
     @test all(isfinite, resids)
+    @test maximum(abs.(fast_resids .- resids)) < 1e-8
 
     pval, weights = StatlibBackend._compute_permute_pval(
         Xj, yj, trt;
@@ -399,6 +411,25 @@ end
     @test isfinite(pval)
     @test 0.0 <= pval <= 1.0
     @test length(weights) == sum(trt .== 0.0)
+
+    fast_pval, fast_weights = StatlibBackend._compute_permute_pval(
+        StatlibBackend._placeholder_X(fast_cache),
+        StatlibBackend._placeholder_y(fast_cache),
+        trt;
+        h0 = 0.0,
+        post_length = 1,
+        type = 0,
+        q = 1.0,
+        ns = 128,
+        ridge = false,
+        scm = true,
+        lambda = 0.0,
+        fit_cache = fast_cache,
+        threaded_permutations = false
+    )
+
+    @test fast_pval == pval
+    @test maximum(abs.(fast_weights .- weights)) < 1e-8
 
     pval_iid_small, _ = StatlibBackend._compute_permute_pval(
         Xj, yj, trt;
@@ -464,4 +495,16 @@ end
     @test isequal(hi_ref, hi_grid)
     @test isequal(p_ref, p_grid)
     @test isequal(w_ref, w_grid)
+
+    one_post_stats = StatlibBackend._pointwise_conformal_stats(X, y[:, 1:1], trt)
+    one_post_cache = StatlibBackend._pointwise_conformal_cache(one_post_stats, 1)
+    @test one_post_cache.tpost == 1
+    @test size(one_post_cache.y0, 2) == 1
+    @test size(one_post_cache.y1, 1) == 1
+    one_post_fit = StatlibBackend._fit_from_conformal_cache(one_post_cache, 0.0)
+    one_post_resids = StatlibBackend._conformal_resids_from_cache(
+        one_post_cache, nothing, nothing, one_post_fit, 0.0
+    )
+    @test length(one_post_resids) == t0 + 2
+    @test all(isfinite, one_post_resids)
 end
