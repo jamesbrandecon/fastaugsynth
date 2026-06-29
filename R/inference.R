@@ -32,9 +32,20 @@
     lambda <- 0.0
   }
 
+  progfunc <- tolower(ascm$progfunc)
+  if (is.null(progfunc) || length(progfunc) == 0L || !nzchar(progfunc[[1L]])) {
+    progfunc <- "none"
+  }
+  ridge <- progfunc == "ridge"
+  scm <- if (ridge) {
+    isTRUE(ascm$scm)
+  } else {
+    TRUE
+  }
+
   list(
-    ridge = tolower(ascm$progfunc) == "ridge",
-    scm = isTRUE(ascm$scm),
+    ridge = ridge,
+    scm = scm,
     lambda = lambda,
     holdout_length = holdout_length,
     min1se = min1se

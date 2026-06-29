@@ -106,6 +106,17 @@ test_that("jackknife summary works for single-period SCM and ridge fits", {
   expect_equal(jack_asyn$att$Std.Error[21:25], c(0.03368404, 0.04762395, 0.06166484, 0.08863483, 0.08525669), tolerance = 1e-4)
 })
 
+test_that("None-program jackknife follows fitted SCM weights even when scm flag is false", {
+  basque <- basque_panel()
+
+  fit <- augsynth(gdpcap ~ trt, regionno, year, basque, progfunc = "None", scm = FALSE, t_int = 1975)
+  backend <- jackknife_se_single(fit)
+  fallback <- .jackknife_se_single(fit)
+
+  expect_equal(unname(backend$att), unname(fallback$att), tolerance = 1e-8)
+  expect_equal(unname(backend$se), unname(fallback$se), tolerance = 1e-8)
+})
+
 test_that("conformal summary matches deterministic basque benchmarks", {
   basque <- basque_panel()
 
