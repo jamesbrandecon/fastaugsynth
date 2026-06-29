@@ -1034,7 +1034,7 @@ function _jackknife_plus_row_plain_scm!(X::AbstractMatrix{Float64},
 
             est_mean = 0.0
             @inbounds for j in 1:tpost
-                v = problem.y1_raw[j] - post_i[j]
+                v = post_i[j]
                 est_mean += v
                 jack_ests[1, j, i] = v + abs(held)
                 jack_ests[2, j, i] = v - abs(held)
@@ -1061,7 +1061,7 @@ function _jackknife_plus_row_plain_scm!(X::AbstractMatrix{Float64},
 
             est_mean = 0.0
             @inbounds for j in 1:tpost
-                v = problem.y1_raw[j] - post_i[j]
+                v = post_i[j]
                 est_mean += v
                 jack_ests[1, j, i] = v + abs(held)
                 jack_ests[2, j, i] = v - abs(held)
@@ -1094,9 +1094,10 @@ function _jackknife_plus_row_plain_scm!(X::AbstractMatrix{Float64},
         end
     end
 
-    y1 = vcat(base_counter, mean(base_counter[(t0 + 1):end]))
-    lb_shift = y1 - ub
-    ub_shift = y1 - lb
+    treated_obs = vcat(problem.x1_raw, problem.y1_raw)
+    treated_obs = vcat(treated_obs, mean(treated_obs[(t0 + 1):end]))
+    lb_shift = treated_obs - ub
+    ub_shift = treated_obs - lb
     att = vcat(base_att, mean(base_att[(t0 + 1):end]))
     held = vcat(held_out, base_att[(t0 + 1):end], mean(base_att[(t0 + 1):end]))
     (att = att, lb = lb_shift, ub = ub_shift, heldout_att = held)
@@ -1941,10 +1942,13 @@ function _jackknife_plus_row!(X::AbstractMatrix{Float64}, y::AbstractMatrix{Floa
         end
     end
 
-    base_counter = _predict_counterfactual(X, y, trt, base.fit)
-    y1 = vcat(base_counter, mean(base_counter[(t0 + 1):end]))
-    lb_shift = y1 - ub
-    ub_shift = y1 - lb
+    treated_obs = vcat(
+        vec(mean(X[trt_mask_view, :], dims = 1)),
+        vec(mean(y[trt_mask_view, :], dims = 1))
+    )
+    treated_obs = vcat(treated_obs, mean(treated_obs[(t0 + 1):end]))
+    lb_shift = treated_obs - ub
+    ub_shift = treated_obs - lb
 
     out_att = vcat(base_att, mean(base_att[(t0 + 1):end]))
     held = vcat(held_out, base_att[(t0 + 1):end], mean(base_att[(t0 + 1):end]))
