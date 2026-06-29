@@ -110,8 +110,8 @@ test_that("None-program jackknife follows fitted SCM weights even when scm flag 
   basque <- basque_panel()
 
   fit <- augsynth(gdpcap ~ trt, regionno, year, basque, progfunc = "None", scm = FALSE, t_int = 1975)
-  backend <- jackknife_se_single(fit)
-  fallback <- .jackknife_se_single(fit)
+  backend <- fastaugsynth:::jackknife_se_single(fit)
+  fallback <- fastaugsynth:::.jackknife_se_single(fit)
 
   expect_equal(unname(backend$att), unname(fallback$att), tolerance = 1e-8)
   expect_equal(unname(backend$se), unname(fallback$se), tolerance = 1e-8)
@@ -121,8 +121,8 @@ test_that("jackknife plus backend matches R fallback intervals", {
   basque <- basque_panel()
 
   fit <- augsynth(gdpcap ~ trt, regionno, year, basque, progfunc = "None", scm = TRUE, t_int = 1975)
-  backend <- time_jackknife_plus(fit)
-  fallback <- .time_jackknife_plus(fit)
+  backend <- fastaugsynth:::time_jackknife_plus(fit)
+  fallback <- fastaugsynth:::.time_jackknife_plus(fit)
 
   expect_equal(unname(backend$att), unname(fallback$att), tolerance = 1e-8)
   expect_equal(unname(backend$lb), unname(fallback$lb), tolerance = 1e-8)
