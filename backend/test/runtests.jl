@@ -359,6 +359,95 @@ end
     @test all(isfinite, se[t0 + 1:end])
 end
 
+@testset "Jackknife sufficient-stat shortcuts stay valid" begin
+    n0 = 16
+    n1 = 3
+    t0 = 12
+    tpost = 5
+    n = n0 + n1
+    X = randn(n, t0)
+    y = randn(n, tpost)
+    trt = vcat(zeros(Float64, n0), ones(Float64, n1))
+    y[(n0 + 1):end, :] .+= 1.0
+
+    problem = StatlibBackend._prepare_plain_scm_problem(X, y, trt)
+    base_fit = StatlibBackend._solve_plain_scm(problem)
+    base_weights = vec(base_fit.weights)
+    raw_gram = Matrix(problem.X0_raw * transpose(problem.X0_raw))
+    raw_q = -(problem.X0_raw * problem.x1_raw)
+    omit = 3
+
+    mean_excl = Vector{Float64}(undef, t0)
+    x1_excl = Vector{Float64}(undef, t0)
+    Dbuf = Matrix{Float64}(undef, n0 - 1, t0)
+    Gref = Matrix{Float64}(undef, n0 - 1, n0 - 1)
+    qref = Vector{Float64}(undef, n0 - 1)
+    Gfast = similar(Gref)
+    qfast = similar(qref)
+    initbuf = Vector{Float64}(undef, n0 - 1)
+
+    @inbounds for j in 1:t0
+        mean_excl[j] = (problem.control_pre_sum[j] - problem.X0_raw[omit, j]) / (n0 - 1)
+        x1_excl[j] = problem.x1_raw[j] - mean_excl[j]
+    end
+    row_out = 1
+    @inbounds for row in 1:n0
+        if row == omit
+            continue
+        end
+        for j in 1:t0
+            Dbuf[row_out, j] = problem.X0_raw[row, j] - mean_excl[j]
+        end
+        row_out += 1
+    end
+    mul!(Gref, Dbuf, transpose(Dbuf))
+    mul!(qref, Dbuf, x1_excl)
+    qref .*= -1
+    StatlibBackend._fill_plain_scm_omit_control_raw_system!(Gfast, qfast, raw_gram, raw_q, omit)
+
+    init = StatlibBackend._scale_leaveout_init!(initbuf, base_weights, omit, n0)
+    wref = StatlibBackend._solve_simplex_qp_warm(Gref, qref; init = init)
+    init = StatlibBackend._scale_leaveout_init!(initbuf, base_weights, omit, n0)
+    wfast = StatlibBackend._solve_simplex_qp_warm(Gfast, qfast; init = init)
+    @test wfast ≈ wref atol = 1e-10
+
+    uniform = StatlibBackend._jackknife_unit_std!(
+        X, y, trt;
+        ridge = false, scm = false, lambda = 0.0
+    )
+
+    control_post_sum = vec(sum(y[1:n0, :]; dims = 1))
+    treated_post_sum = vec(sum(y[(n0 + 1):end, :]; dims = 1))
+    control_post_mean = control_post_sum ./ n0
+    treated_post_mean = treated_post_sum ./ n1
+    ests = Matrix{Float64}(undef, tpost + 1, n)
+    col = 1
+    for i in 1:n0
+        est_mean = 0.0
+        for j in 1:tpost
+            est = treated_post_mean[j] - (control_post_sum[j] - y[i, j]) / (n0 - 1)
+            ests[j, col] = est
+            est_mean += est
+        end
+        ests[tpost + 1, col] = est_mean / tpost
+        col += 1
+    end
+    for i in 1:n1
+        row = n0 + i
+        est_mean = 0.0
+        for j in 1:tpost
+            est = (treated_post_sum[j] - y[row, j]) / (n1 - 1) - control_post_mean[j]
+            ests[j, col] = est
+            est_mean += est
+        end
+        ests[tpost + 1, col] = est_mean / tpost
+        col += 1
+    end
+    avg = vec(mean(ests; dims = 2))
+    expected_se = sqrt.((n - 1) / n .* vec(sum((ests .- avg) .^ 2; dims = 2)))
+    @test uniform.se[(t0 + 1):end] ≈ expected_se atol = 1e-12
+end
+
 @testset "Cached conformal path stays valid" begin
     n = 41
     t0 = 80

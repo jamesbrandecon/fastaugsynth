@@ -95,6 +95,52 @@ augsynth_inference_backend <- function(ascm, inf_type,
   )
 }
 
+augsynth_jackknife_backend <- function(ascm) {
+  params <- .augsynth_inference_params(ascm)
+  wide_data <- ascm$data
+  libpath <- tryCatch(ensure_backend_available(), error = function(e) "")
+  if (!nzchar(libpath) || !file.exists(libpath)) {
+    return(NULL)
+  }
+
+  .Call(
+    C_jackknife_unit_std,
+    as.matrix(wide_data$X),
+    as.matrix(wide_data$y),
+    as.double(wide_data$trt),
+    as.logical(params$ridge),
+    as.logical(params$scm),
+    as.double(params$lambda),
+    as.integer(params$holdout_length),
+    as.logical(params$min1se),
+    libpath
+  )
+}
+
+augsynth_jackknife_plus_backend <- function(ascm, alpha = 0.05, conservative = FALSE) {
+  params <- .augsynth_inference_params(ascm)
+  wide_data <- ascm$data
+  libpath <- tryCatch(ensure_backend_available(), error = function(e) "")
+  if (!nzchar(libpath) || !file.exists(libpath)) {
+    return(NULL)
+  }
+
+  .Call(
+    C_jackknife_plus,
+    as.matrix(wide_data$X),
+    as.matrix(wide_data$y),
+    as.double(wide_data$trt),
+    as.logical(params$ridge),
+    as.logical(params$scm),
+    as.double(params$lambda),
+    as.double(alpha),
+    as.logical(conservative),
+    as.integer(params$holdout_length),
+    as.logical(params$min1se),
+    libpath
+  )
+}
+
 drop_time_t <- function(wide_data, Z, t_drop) {
   new_wide_data <- list()
   new_wide_data$trt <- wide_data$trt
@@ -116,9 +162,8 @@ drop_time_t <- function(wide_data, Z, t_drop) {
 }
 
 time_jackknife_plus <- function(ascm, alpha = 0.05, conservative = FALSE) {
-  backend <- augsynth_inference_backend(
+  backend <- augsynth_jackknife_plus_backend(
     ascm = ascm,
-    inf_type = "jackknife+",
     alpha = alpha,
     conservative = conservative
   )
@@ -430,7 +475,7 @@ drop_unit_i <- function(wide_data, Z, i) {
 }
 
 jackknife_se_single <- function(ascm) {
-  backend <- augsynth_inference_backend(ascm = ascm, inf_type = "jackknife")
+  backend <- augsynth_jackknife_backend(ascm = ascm)
   if (!is.null(backend)) {
     return(backend)
   }
