@@ -376,12 +376,18 @@ run_scenario_benchmark <- function(scenario, scenario_id, seed, with_gsynth, rep
   }
 
   if ("jackknife" %in% inference_modes) {
-    method_exprs$fastaugsynth_jackknife <- as.call(list(as.name("summary_with_pkg"), "fastaugsynth", fastaugsynth_fit_expr, "jackknife"))
-    method_exprs$augsynth_jackknife <- as.call(list(as.name("summary_with_pkg"), "augsynth", augsynth_fit_expr, "jackknife"))
+    fastaugsynth_inference_fit <- eval(fastaugsynth_fit_expr)
+    augsynth_inference_fit <- eval(augsynth_fit_expr)
+    method_exprs$fastaugsynth_jackknife <- quote(summary_with_pkg("fastaugsynth", fastaugsynth_inference_fit, "jackknife"))
+    method_exprs$augsynth_jackknife <- quote(summary_with_pkg("augsynth", augsynth_inference_fit, "jackknife"))
   }
   if ("conformal" %in% inference_modes) {
-    method_exprs$fastaugsynth_conformal <- as.call(list(as.name("summary_with_pkg"), "fastaugsynth", fastaugsynth_fit_expr, "conformal"))
-    method_exprs$augsynth_conformal <- as.call(list(as.name("summary_with_pkg"), "augsynth", augsynth_fit_expr, "conformal"))
+    if (!exists("fastaugsynth_inference_fit", inherits = FALSE)) {
+      fastaugsynth_inference_fit <- eval(fastaugsynth_fit_expr)
+      augsynth_inference_fit <- eval(augsynth_fit_expr)
+    }
+    method_exprs$fastaugsynth_conformal <- quote(summary_with_pkg("fastaugsynth", fastaugsynth_inference_fit, "conformal"))
+    method_exprs$augsynth_conformal <- quote(summary_with_pkg("augsynth", augsynth_inference_fit, "conformal"))
   }
 
   mark <- do.call(

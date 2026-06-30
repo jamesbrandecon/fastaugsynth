@@ -683,6 +683,13 @@ end
     scm && !ridge && V === nothing && !fixedeff
 end
 
+@inline function _can_use_plain_uniform_fastpath(ridge::Bool,
+                                                scm::Bool,
+                                                V::Union{AbstractMatrix{Float64}, Nothing},
+                                                fixedeff::Bool)
+    !scm && !ridge && V === nothing && !fixedeff
+end
+
 function _prepare_plain_scm_problem(X::AbstractMatrix{Float64},
                                    y::AbstractMatrix{Float64},
                                    trt::AbstractVector{Float64};
@@ -781,6 +788,71 @@ function _plain_scm_att(problem::PlainSCMProblem,
     out
 end
 
+@inline function _fill_plain_scm_omit_control_raw_system!(P::AbstractMatrix{Float64},
+                                                         q::AbstractVector{Float64},
+                                                         raw_gram::AbstractMatrix{Float64},
+                                                         raw_q::AbstractVector{Float64},
+                                                         omit_idx::Int)
+    row_out = 1
+    n0 = size(raw_gram, 1)
+    @inbounds for row in 1:n0
+        if row == omit_idx
+            continue
+        end
+        q[row_out] = raw_q[row]
+        col_out = 1
+        for col in 1:n0
+            if col == omit_idx
+                continue
+            end
+            P[row_out, col_out] = raw_gram[row, col]
+            col_out += 1
+        end
+        row_out += 1
+    end
+    return
+end
+
+@inline function _weighted_control_post!(out::AbstractVector{Float64},
+                                        Y0_raw::AbstractMatrix{Float64},
+                                        weights::AbstractVector{Float64})
+    fill!(out, 0.0)
+    tpost = length(out)
+    @inbounds for row in axes(Y0_raw, 1)
+        wr = weights[row]
+        if wr == 0.0
+            continue
+        end
+        for j in 1:tpost
+            out[j] += Y0_raw[row, j] * wr
+        end
+    end
+    return out
+end
+
+@inline function _weighted_control_post_omit!(out::AbstractVector{Float64},
+                                             Y0_raw::AbstractMatrix{Float64},
+                                             weights::AbstractVector{Float64},
+                                             omit_idx::Int)
+    fill!(out, 0.0)
+    tpost = length(out)
+    widx = 1
+    @inbounds for row in axes(Y0_raw, 1)
+        if row == omit_idx
+            continue
+        end
+        wr = weights[widx]
+        widx += 1
+        if wr == 0.0
+            continue
+        end
+        for j in 1:tpost
+            out[j] += Y0_raw[row, j] * wr
+        end
+    end
+    return out
+end
+
 @inline function _fill_plain_scm_omit_pre_system!(P::AbstractMatrix{Float64},
                                                  q::AbstractVector{Float64},
                                                  problem::PlainSCMProblem,
@@ -796,6 +868,132 @@ end
         end
     end
     return
+end
+
+@inline function _scale_leaveout_init!(initbuf::AbstractVector{Float64},
+                                      base_weights::AbstractVector{Float64},
+                                      omit_idx::Int,
+                                      n0::Int)
+    if n0 <= 1
+        return nothing
+    end
+    if omit_idx > 1
+        copyto!(initbuf, 1, base_weights, 1, omit_idx - 1)
+    end
+    if omit_idx < n0
+        copyto!(initbuf, omit_idx, base_weights, omit_idx + 1, n0 - omit_idx)
+    end
+    s = sum(@view(initbuf[1:(n0 - 1)]))
+    if s <= 0
+        return nothing
+    end
+    invs = 1.0 / s
+    @inbounds for j in 1:(n0 - 1)
+        initbuf[j] *= invs
+    end
+    return @view(initbuf[1:(n0 - 1)])
+end
+
+function _plain_scm_control_leaveout_est!(estbuf::AbstractVector{Float64},
+                                          problem::PlainSCMProblem,
+                                          raw_gram::AbstractMatrix{Float64},
+                                          raw_q::AbstractVector{Float64},
+                                          base_weights::AbstractVector{Float64},
+                                          omit::Int,
+                                          Gbuf::AbstractMatrix{Float64},
+                                          qbuf::AbstractVector{Float64},
+                                          initbuf::AbstractVector{Float64},
+                                          postbuf::AbstractVector{Float64})
+    if problem.n0 <= 1
+        error("No control units remain after jackknife leaveout")
+    end
+    _fill_plain_scm_omit_control_raw_system!(Gbuf, qbuf, raw_gram, raw_q, omit)
+    init = _scale_leaveout_init!(initbuf, base_weights, omit, problem.n0)
+    weights_i = _solve_simplex_qp_warm(Gbuf, qbuf; init = init)
+    _weighted_control_post_omit!(postbuf, problem.Y0_raw, weights_i, omit)
+
+    est_mean = 0.0
+    @inbounds for j in 1:problem.tpost
+        v = problem.y1_raw[j] - postbuf[j]
+        estbuf[j] = v
+        est_mean += v
+    end
+    estbuf[problem.tpost + 1] = est_mean / problem.tpost
+    return estbuf
+end
+
+function _plain_scm_treated_leaveout_est!(estbuf::AbstractVector{Float64},
+                                          problem::PlainSCMProblem,
+                                          X::AbstractMatrix{Float64},
+                                          y::AbstractMatrix{Float64},
+                                          control_pre_mean::AbstractVector{Float64},
+                                          base_weights::AbstractVector{Float64},
+                                          omit::Int,
+                                          x1_excl::AbstractVector{Float64},
+                                          y1_excl::AbstractVector{Float64},
+                                          qbuf::AbstractVector{Float64},
+                                          postbuf::AbstractVector{Float64})
+    unit_idx = problem.treated_idx[omit]
+    @inbounds for j in 1:problem.t0
+        x1_excl[j] = (problem.treated_pre_sum[j] - X[unit_idx, j]) / (problem.n1 - 1) - control_pre_mean[j]
+    end
+    @inbounds for j in 1:problem.tpost
+        y1_excl[j] = (problem.treated_post_sum[j] - y[unit_idx, j]) / (problem.n1 - 1)
+    end
+
+    mul!(qbuf, problem.X0, x1_excl)
+    @. qbuf = -qbuf
+    weights_i = _solve_simplex_qp_warm(problem.gram, qbuf; init = base_weights)
+    _weighted_control_post!(postbuf, problem.Y0_raw, weights_i)
+
+    est_mean = 0.0
+    @inbounds for j in 1:problem.tpost
+        v = y1_excl[j] - postbuf[j]
+        estbuf[j] = v
+        est_mean += v
+    end
+    estbuf[problem.tpost + 1] = est_mean / problem.tpost
+    return estbuf
+end
+
+@inline function _update_jackknife_moments!(means::AbstractVector{Float64},
+                                           m2::AbstractVector{Float64},
+                                           count::Int,
+                                           est::AbstractVector{Float64})
+    @inbounds for j in eachindex(est)
+        x = est[j]
+        delta = x - means[j]
+        means[j] += delta / count
+        delta2 = x - means[j]
+        m2[j] += delta * delta2
+    end
+    return
+end
+
+function _merge_jackknife_moments!(running_means::AbstractVector{Float64},
+                                   running_m2::AbstractVector{Float64},
+                                   running_count::Int,
+                                   local_means::AbstractVector{Float64},
+                                   local_m2::AbstractVector{Float64},
+                                   local_count::Int)
+    if local_count == 0
+        return running_count
+    end
+    if running_count == 0
+        copyto!(running_means, local_means)
+        copyto!(running_m2, local_m2)
+        return local_count
+    end
+
+    n1 = Float64(running_count)
+    n2 = Float64(local_count)
+    denom = n1 + n2
+    @inbounds for j in eachindex(running_means)
+        delta = local_means[j] - running_means[j]
+        running_means[j] += (n2 / denom) * delta
+        running_m2[j] += local_m2[j] + (n1 * n2 / denom) * delta^2
+    end
+    return running_count + local_count
 end
 
 function _jackknife_plus_row_plain_scm!(X::AbstractMatrix{Float64},
@@ -836,7 +1034,7 @@ function _jackknife_plus_row_plain_scm!(X::AbstractMatrix{Float64},
 
             est_mean = 0.0
             @inbounds for j in 1:tpost
-                v = problem.y1_raw[j] - post_i[j]
+                v = post_i[j]
                 est_mean += v
                 jack_ests[1, j, i] = v + abs(held)
                 jack_ests[2, j, i] = v - abs(held)
@@ -863,7 +1061,7 @@ function _jackknife_plus_row_plain_scm!(X::AbstractMatrix{Float64},
 
             est_mean = 0.0
             @inbounds for j in 1:tpost
-                v = problem.y1_raw[j] - post_i[j]
+                v = post_i[j]
                 est_mean += v
                 jack_ests[1, j, i] = v + abs(held)
                 jack_ests[2, j, i] = v - abs(held)
@@ -896,9 +1094,10 @@ function _jackknife_plus_row_plain_scm!(X::AbstractMatrix{Float64},
         end
     end
 
-    y1 = vcat(base_counter, mean(base_counter[(t0 + 1):end]))
-    lb_shift = y1 - ub
-    ub_shift = y1 - lb
+    treated_obs = vcat(problem.x1_raw, problem.y1_raw)
+    treated_obs = vcat(treated_obs, mean(treated_obs[(t0 + 1):end]))
+    lb_shift = treated_obs - ub
+    ub_shift = treated_obs - lb
     att = vcat(base_att, mean(base_att[(t0 + 1):end]))
     held = vcat(held_out, base_att[(t0 + 1):end], mean(base_att[(t0 + 1):end]))
     (att = att, lb = lb_shift, ub = ub_shift, heldout_att = held)
@@ -923,105 +1122,184 @@ function _jackknife_unit_std_plain_scm!(X::AbstractMatrix{Float64},
         error("No units selected for jackknife")
     end
 
-    ests = Matrix{Float64}(undef, tpost + 1, length(sel_controls) + length(sel_treated))
-    col = 1
+    sel_control_len = length(sel_controls)
+    sel_len = sel_control_len + length(sel_treated)
+    mean_ests = zeros(tpost + 1)
+    m2_ests = zeros(tpost + 1)
+    sample_count = 0
+    raw_gram = isempty(sel_controls) ? Matrix{Float64}(undef, 0, 0) : Matrix(problem.X0_raw * transpose(problem.X0_raw))
+    raw_q = isempty(sel_controls) ? Float64[] : -(problem.X0_raw * problem.x1_raw)
+    control_pre_mean = isempty(sel_treated) ? Float64[] : problem.control_pre_sum ./ problem.n0
 
-    if !isempty(sel_controls)
-        mean_excl = Vector{Float64}(undef, t0)
-        x1_excl = Vector{Float64}(undef, t0)
-        Dbuf = Matrix{Float64}(undef, problem.n0 - 1, t0)
-        Ybuf = Matrix{Float64}(undef, problem.n0 - 1, tpost)
-        Gbuf = Matrix{Float64}(undef, problem.n0 - 1, problem.n0 - 1)
-        qbuf = Vector{Float64}(undef, problem.n0 - 1)
+    if Threads.nthreads() > 1 && sel_len > 8
+        nthreads = Threads.nthreads()
+        G_pool = [Matrix{Float64}(undef, max(problem.n0 - 1, 0), max(problem.n0 - 1, 0)) for _ in 1:nthreads]
+        q_control_pool = [Vector{Float64}(undef, max(problem.n0 - 1, 0)) for _ in 1:nthreads]
+        init_pool = [Vector{Float64}(undef, max(problem.n0 - 1, 1)) for _ in 1:nthreads]
+        post_pool = [Vector{Float64}(undef, tpost) for _ in 1:nthreads]
+        est_pool = [Vector{Float64}(undef, tpost + 1) for _ in 1:nthreads]
+        x1_pool = [Vector{Float64}(undef, t0) for _ in 1:nthreads]
+        y1_pool = [Vector{Float64}(undef, tpost) for _ in 1:nthreads]
+        q_treated_pool = [Vector{Float64}(undef, problem.n0) for _ in 1:nthreads]
+        thread_counts = zeros(Int, nthreads)
+        thread_means = [zeros(tpost + 1) for _ in 1:nthreads]
+        thread_m2 = [zeros(tpost + 1) for _ in 1:nthreads]
+
+        Threads.@threads for idx in 1:sel_len
+            tid = threadid()
+            estbuf = est_pool[tid]
+            if idx <= sel_control_len
+                _plain_scm_control_leaveout_est!(
+                    estbuf, problem, raw_gram, raw_q, base_weights,
+                    sel_controls[idx], G_pool[tid], q_control_pool[tid],
+                    init_pool[tid], post_pool[tid]
+                )
+            else
+                _plain_scm_treated_leaveout_est!(
+                    estbuf, problem, X, y, control_pre_mean, base_weights,
+                    sel_treated[idx - sel_control_len], x1_pool[tid],
+                    y1_pool[tid], q_treated_pool[tid], post_pool[tid]
+                )
+            end
+            local_count = thread_counts[tid] + 1
+            _update_jackknife_moments!(
+                thread_means[tid], thread_m2[tid], local_count, estbuf
+            )
+            thread_counts[tid] = local_count
+        end
+
+        for tid in 1:nthreads
+            sample_count = _merge_jackknife_moments!(
+                mean_ests, m2_ests, sample_count,
+                thread_means[tid], thread_m2[tid], thread_counts[tid]
+            )
+        end
+    else
+        Gbuf = Matrix{Float64}(undef, max(problem.n0 - 1, 0), max(problem.n0 - 1, 0))
+        q_control = Vector{Float64}(undef, max(problem.n0 - 1, 0))
         initbuf = Vector{Float64}(undef, max(problem.n0 - 1, 1))
         postbuf = Vector{Float64}(undef, tpost)
-
-        for omit in sel_controls
-            @inbounds for j in 1:t0
-                mean_excl[j] = (problem.control_pre_sum[j] - problem.X0_raw[omit, j]) / (problem.n0 - 1)
-                x1_excl[j] = problem.x1_raw[j] - mean_excl[j]
-            end
-
-            row_out = 1
-            @inbounds for row in 1:problem.n0
-                if row == omit
-                    continue
-                end
-                for j in 1:t0
-                    Dbuf[row_out, j] = problem.X0_raw[row, j] - mean_excl[j]
-                end
-                for j in 1:tpost
-                    Ybuf[row_out, j] = problem.Y0_raw[row, j]
-                end
-                row_out += 1
-            end
-
-            mul!(Gbuf, Dbuf, transpose(Dbuf))
-            mul!(qbuf, Dbuf, x1_excl)
-            @. qbuf = -qbuf
-
-            init = nothing
-            if problem.n0 > 1
-                if omit > 1
-                    copyto!(initbuf, 1, base_weights, 1, omit - 1)
-                end
-                if omit < problem.n0
-                    copyto!(initbuf, omit, base_weights, omit + 1, problem.n0 - omit)
-                end
-                s = sum(@view(initbuf[1:(problem.n0 - 1)]))
-                if s > 0
-                    @views @. initbuf[1:(problem.n0 - 1)] = initbuf[1:(problem.n0 - 1)] / s
-                    init = @view(initbuf[1:(problem.n0 - 1)])
-                end
-            end
-
-            weights_i = _solve_simplex_qp_warm(Gbuf, qbuf; init = init)
-            mul!(postbuf, transpose(Ybuf), weights_i)
-            est_mean = 0.0
-            @inbounds for j in 1:tpost
-                v = problem.y1_raw[j] - postbuf[j]
-                ests[j, col] = v
-                est_mean += v
-            end
-            ests[tpost + 1, col] = est_mean / tpost
-            col += 1
-        end
-    end
-
-    if !isempty(sel_treated)
-        control_pre_mean = problem.control_pre_sum ./ problem.n0
+        estbuf = Vector{Float64}(undef, tpost + 1)
         x1_excl = Vector{Float64}(undef, t0)
         y1_excl = Vector{Float64}(undef, tpost)
-        qbuf = Vector{Float64}(undef, problem.n0)
-        postbuf = Vector{Float64}(undef, tpost)
+        q_treated = Vector{Float64}(undef, problem.n0)
+
+        for omit in sel_controls
+            _plain_scm_control_leaveout_est!(
+                estbuf, problem, raw_gram, raw_q, base_weights,
+                omit, Gbuf, q_control, initbuf, postbuf
+            )
+            sample_count += 1
+            _update_jackknife_moments!(mean_ests, m2_ests, sample_count, estbuf)
+        end
 
         for omit in sel_treated
-            unit_idx = problem.treated_idx[omit]
-            @inbounds for j in 1:t0
-                x1_excl[j] = (problem.treated_pre_sum[j] - X[unit_idx, j]) / (problem.n1 - 1) - control_pre_mean[j]
-            end
-            @inbounds for j in 1:tpost
-                y1_excl[j] = (problem.treated_post_sum[j] - y[unit_idx, j]) / (problem.n1 - 1)
-            end
-
-            mul!(qbuf, problem.X0, x1_excl)
-            @. qbuf = -qbuf
-            weights_i = _solve_simplex_qp_warm(problem.gram, qbuf; init = base_weights)
-            mul!(postbuf, transpose(problem.Y0_raw), weights_i)
-
-            est_mean = 0.0
-            @inbounds for j in 1:tpost
-                v = y1_excl[j] - postbuf[j]
-                ests[j, col] = v
-                est_mean += v
-            end
-            ests[tpost + 1, col] = est_mean / tpost
-            col += 1
+            _plain_scm_treated_leaveout_est!(
+                estbuf, problem, X, y, control_pre_mean, base_weights,
+                omit, x1_excl, y1_excl, q_treated, postbuf
+            )
+            sample_count += 1
+            _update_jackknife_moments!(mean_ests, m2_ests, sample_count, estbuf)
         end
     end
 
-    avg = vec(mean(ests; dims = 2))
-    se = sqrt.((n - 1) / n .* vec(sum((ests .- avg) .^ 2; dims = 2)))
+    if sample_count != sel_len
+        error("jackknife unit standard error sample count does not match selected units")
+    end
+    se = sqrt.((n - 1) / n .* m2_ests)
+    (att = vcat(base_att, mean(base_att[(t0 + 1):end])), se = vcat(fill(NaN, t0), se))
+end
+
+function _jackknife_unit_std_plain_uniform!(X::AbstractMatrix{Float64},
+                                           y::AbstractMatrix{Float64},
+                                           trt::AbstractVector{Float64})
+    if size(y, 1) != size(X, 1)
+        error("X and y must have matching row counts")
+    end
+    n, t0 = size(X)
+    tpost = size(y, 2)
+    treated = trt .> 0.5
+    control = .!treated
+    control_idx = findall(control)
+    treated_idx = findall(treated)
+    n0 = length(control_idx)
+    n1 = length(treated_idx)
+    if n0 == 0
+        error("No control units found")
+    end
+    if n1 == 0
+        error("No treated units found")
+    end
+
+    control_pre_sum = vec(sum(X[control_idx, :]; dims = 1))
+    control_post_sum = vec(sum(y[control_idx, :]; dims = 1))
+    treated_pre_sum = vec(sum(X[treated_idx, :]; dims = 1))
+    treated_post_sum = vec(sum(y[treated_idx, :]; dims = 1))
+
+    control_pre_mean = control_pre_sum ./ n0
+    control_post_mean = control_post_sum ./ n0
+    treated_pre_mean = treated_pre_sum ./ n1
+    treated_post_mean = treated_post_sum ./ n1
+    base_att = vcat(treated_pre_mean .- control_pre_mean, treated_post_mean .- control_post_mean)
+
+    sel_controls = round(1.0 / n0, digits = 3) != 0.0 ? collect(1:n0) : Int[]
+    sel_treated = n1 > 1 ? collect(1:n1) : Int[]
+    sel_len = length(sel_controls) + length(sel_treated)
+    if sel_len == 0
+        error("No units selected for jackknife")
+    end
+
+    mean_ests = zeros(tpost + 1)
+    m2_ests = zeros(tpost + 1)
+    sample_count = 0
+
+    for omit in sel_controls
+        if n0 <= 1
+            error("No control units remain after jackknife leaveout")
+        end
+        unit_idx = control_idx[omit]
+        sample_count += 1
+        est_mean = 0.0
+        @inbounds for j in 1:tpost
+            control_excl = (control_post_sum[j] - y[unit_idx, j]) / (n0 - 1)
+            x = treated_post_mean[j] - control_excl
+            est_mean += x
+            delta = x - mean_ests[j]
+            mean_ests[j] += delta / sample_count
+            delta2 = x - mean_ests[j]
+            m2_ests[j] += delta * delta2
+        end
+        x = est_mean / tpost
+        delta = x - mean_ests[tpost + 1]
+        mean_ests[tpost + 1] += delta / sample_count
+        delta2 = x - mean_ests[tpost + 1]
+        m2_ests[tpost + 1] += delta * delta2
+    end
+
+    for omit in sel_treated
+        unit_idx = treated_idx[omit]
+        sample_count += 1
+        est_mean = 0.0
+        @inbounds for j in 1:tpost
+            treated_excl = (treated_post_sum[j] - y[unit_idx, j]) / (n1 - 1)
+            x = treated_excl - control_post_mean[j]
+            est_mean += x
+            delta = x - mean_ests[j]
+            mean_ests[j] += delta / sample_count
+            delta2 = x - mean_ests[j]
+            m2_ests[j] += delta * delta2
+        end
+        x = est_mean / tpost
+        delta = x - mean_ests[tpost + 1]
+        mean_ests[tpost + 1] += delta / sample_count
+        delta2 = x - mean_ests[tpost + 1]
+        m2_ests[tpost + 1] += delta * delta2
+    end
+
+    if sample_count != sel_len
+        error("jackknife unit standard error sample count does not match selected units")
+    end
+    se = sqrt.((n - 1) / n .* m2_ests)
     (att = vcat(base_att, mean(base_att[(t0 + 1):end])), se = vcat(fill(NaN, t0), se))
 end
 
@@ -1109,6 +1387,129 @@ function _conformal_build_cache(X::AbstractMatrix{Float64},
     )
 end
 
+@inline function _can_use_pointwise_conformal_stats(ridge::Bool,
+                                                    scm::Bool,
+                                                    V::Union{AbstractMatrix{Float64}, Nothing},
+                                                    fixedeff::Bool)
+    !ridge && scm && V === nothing && !fixedeff
+end
+
+function _pointwise_conformal_stats(X::AbstractMatrix{Float64},
+                                    y::AbstractMatrix{Float64},
+                                    trt::AbstractVector{Float64})
+    if size(y, 1) != size(X, 1)
+        error("X and y must have matching row counts")
+    end
+    if size(y, 2) <= 0
+        error("y must contain post-treatment columns")
+    end
+
+    n = size(X, 1)
+    if length(trt) != n
+        error("trt must have one entry per row of X/y")
+    end
+
+    treated = trt .> 0.5
+    control = .!treated
+    if count(treated) == 0
+        error("No treated units found")
+    end
+    if count(control) == 0
+        error("No control units found")
+    end
+
+    control_idx = findall(control)
+    treated_idx = findall(treated)
+
+    X_control = X[control_idx, :]
+    X_means = vec(mean(X_control; dims = 1))
+    X0 = X_control .- transpose(X_means)
+    x1 = vec(mean(X[treated_idx, :]; dims = 1)) .- X_means
+
+    y_control = y[control_idx, :]
+    y_means = vec(mean(y_control; dims = 1))
+    y0 = y_control .- transpose(y_means)
+    y1 = vec(mean(y[treated_idx, :]; dims = 1)) .- y_means
+
+    (
+        X0 = X0,
+        y0 = y0,
+        x1 = x1,
+        y1 = y1,
+        gram = Matrix(X0 * transpose(X0)),
+        q_base = -(X0 * x1),
+        control_idx = control_idx,
+        treated_idx = treated_idx,
+        t0 = size(X, 2),
+        tpost = size(y, 2),
+        n0 = length(control_idx)
+    )
+end
+
+function _pointwise_conformal_cache(stats::NamedTuple, post_index::Int)
+    if post_index < 1 || post_index > stats.tpost
+        error("post_index out of range")
+    end
+
+    shift_feature = copy(@view(stats.y0[:, post_index]))
+    gram = copy(stats.gram)
+    BLAS.ger!(1.0, shift_feature, shift_feature, gram)
+
+    q_base = copy(stats.q_base)
+    @. q_base -= shift_feature * stats.y1[post_index]
+
+    if stats.tpost == 1
+        y0 = zeros(Float64, stats.n0, 1)
+        y1 = zeros(Float64, 1)
+    else
+        y0 = Matrix{Float64}(undef, stats.n0, stats.tpost - 1)
+        col_out = 1
+        @inbounds for col in 1:stats.tpost
+            if col == post_index
+                continue
+            end
+            y0[:, col_out] .= @view stats.y0[:, col]
+            col_out += 1
+        end
+        y1 = Vector{Float64}(undef, stats.tpost - 1)
+        col_out = 1
+        @inbounds for col in 1:stats.tpost
+            if col == post_index
+                continue
+            end
+            y1[col_out] = stats.y1[col]
+            col_out += 1
+        end
+    end
+
+    X0 = hcat(stats.X0, shift_feature)
+    (
+        X0 = X0,
+        X0_raw = X0,
+        y0 = y0,
+        x1 = vcat(stats.x1, stats.y1[post_index]),
+        y1 = y1,
+        gram = gram,
+        q_base = q_base,
+        shift_feature = shift_feature,
+        shift_cols = [stats.t0 + 1],
+        control_idx = stats.control_idx,
+        treated_idx = stats.treated_idx,
+        t0 = stats.t0 + 1,
+        tpost = size(y0, 2),
+        n0 = stats.n0,
+        direct_resids = true
+    )
+end
+
+@inline function _placeholder_X(cache::NamedTuple)
+    Matrix{Float64}(undef, 0, cache.t0)
+end
+
+@inline function _placeholder_y(cache::NamedTuple)
+    Matrix{Float64}(undef, 0, cache.tpost)
+end
+
 function _fit_from_conformal_cache(cache,
                                   h0::Float64;
                                   init_weights::Union{AbstractVector{Float64}, Nothing} = nothing)
@@ -1127,6 +1528,21 @@ function _fit_from_conformal_cache(cache,
 
     syn = _solve_simplex_qp_warm(cache.gram, q; init = init)
     weights = copy(syn)
+    if :direct_resids in propertynames(cache)
+        return (
+            weights = reshape(weights, :, 1),
+            syn = reshape(syn, :, 1),
+            mhat = Float64[],
+            lambda = NaN,
+            l2_imbalance = NaN,
+            scaled_l2_imbalance = NaN,
+            t0 = cache.t0,
+            tpost = cache.tpost,
+            control_idx = cache.control_idx,
+            treated_idx = cache.treated_idx
+        )
+    end
+
     m1_pre = vec(weights' * cache.X0_raw)
     m1_post = vec(weights' * cache.y0)
 
@@ -1145,11 +1561,24 @@ function _fit_from_conformal_cache(cache,
 end
 
 function _conformal_resids_from_cache(cache,
-                                     X::AbstractMatrix{Float64},
-                                     y::AbstractMatrix{Float64},
+                                     X,
+                                     y,
                                      fit::NamedTuple,
                                      h0::Float64)
     w = vec(fit.weights)
+    if :direct_resids in propertynames(cache)
+        resids = vcat(
+            cache.x1 .- vec(transpose(cache.X0_raw) * w),
+            cache.y1 .- vec(transpose(cache.y0) * w)
+        )
+        if h0 != 0.0
+            @inbounds for idx in cache.shift_cols
+                resids[idx] -= h0
+            end
+        end
+        return resids
+    end
+
     mhat = fit.mhat
     t0 = fit.t0
     tpost = fit.tpost
@@ -1513,10 +1942,13 @@ function _jackknife_plus_row!(X::AbstractMatrix{Float64}, y::AbstractMatrix{Floa
         end
     end
 
-    base_counter = _predict_counterfactual(X, y, trt, base.fit)
-    y1 = vcat(base_counter, mean(base_counter[(t0 + 1):end]))
-    lb_shift = y1 - ub
-    ub_shift = y1 - lb
+    treated_obs = vcat(
+        vec(mean(X[trt_mask_view, :], dims = 1)),
+        vec(mean(y[trt_mask_view, :], dims = 1))
+    )
+    treated_obs = vcat(treated_obs, mean(treated_obs[(t0 + 1):end]))
+    lb_shift = treated_obs - ub
+    ub_shift = treated_obs - lb
 
     out_att = vcat(base_att, mean(base_att[(t0 + 1):end]))
     held = vcat(held_out, base_att[(t0 + 1):end], mean(base_att[(t0 + 1):end]))
@@ -1532,6 +1964,9 @@ function _jackknife_unit_std!(X::AbstractMatrix{Float64}, y::AbstractMatrix{Floa
                              min1se::Bool = true,
                              V::Union{AbstractMatrix{Float64}, Nothing} = nothing,
                              fixedeff::Bool = false)
+    if _can_use_plain_uniform_fastpath(ridge, scm, V, fixedeff)
+        return _jackknife_unit_std_plain_uniform!(X, y, trt)
+    end
     if _can_use_plain_scm_fastpath(ridge, scm, V, fixedeff)
         return _jackknife_unit_std_plain_scm!(X, y, trt)
     end
@@ -2212,6 +2647,8 @@ function _conformal!(X::AbstractMatrix{Float64}, y::AbstractMatrix{Float64},
     # work still scales with ns.
     use_outer_threads = tpost > 1 && nthreads > 1 && type != 0
     use_inner_threads = type == 0 && nthreads > 1 && ns >= 500
+    use_pointwise_stats = _can_use_pointwise_conformal_stats(ridge, scm, V, fixedeff)
+    pointwise_stats = use_pointwise_stats ? _pointwise_conformal_stats(X, y, trt) : nothing
     if use_outer_threads
         lo_out = zeros(Float64, tpost)
         hi_out = zeros(Float64, tpost)
@@ -2225,29 +2662,39 @@ function _conformal!(X::AbstractMatrix{Float64}, y::AbstractMatrix{Float64},
             Xj_thread = xj_pool[tid]
             yj_thread = yj_pool[tid]
 
-            Xj_thread[:, 1:t0] .= X
-            @views Xj_thread[:, t0 + 1] .= y[:, j]
-
-            if j == 1
-                @views yj_thread[:, 1:(tpost - 1)] .= y[:, 2:tpost]
-            elseif j == tpost
-                @views yj_thread[:, 1:(tpost - 1)] .= y[:, 1:(tpost - 1)]
+            Xj_eval, yj_eval, conf_cache = if use_pointwise_stats
+                cache = _pointwise_conformal_cache(pointwise_stats, j)
+                (_placeholder_X(cache), _placeholder_y(cache), cache)
             else
-                @views yj_thread[:, 1:(j - 1)] .= y[:, 1:(j - 1)]
-                @views yj_thread[:, j:(tpost - 1)] .= y[:, (j + 1):tpost]
-            end
+                Xj_thread[:, 1:t0] .= X
+                @views Xj_thread[:, t0 + 1] .= y[:, j]
 
-            conf_cache = _conformal_build_cache(
-                Xj_thread, yj_thread, trt;
-                V = V, fixedeff = fixedeff
-            )
+                if j == 1
+                    @views yj_thread[:, 1:(tpost - 1)] .= y[:, 2:tpost]
+                elseif j == tpost
+                    @views yj_thread[:, 1:(tpost - 1)] .= y[:, 1:(tpost - 1)]
+                else
+                    @views yj_thread[:, 1:(j - 1)] .= y[:, 1:(j - 1)]
+                    @views yj_thread[:, j:(tpost - 1)] .= y[:, (j + 1):tpost]
+                end
+
+                cache = if !ridge && scm
+                    _conformal_build_cache(
+                        Xj_thread, yj_thread, trt;
+                        V = V, fixedeff = fixedeff
+                    )
+                else
+                    nothing
+                end
+                (Xj_thread, yj_thread, cache)
+            end
 
             grid = collect(
                 range(base_att[t0 + j] - 2 * post_sd, stop = base_att[t0 + j] + 2 * post_sd, length = grid_size)
             )
 
             lo, hi, pv, _ = _compute_permute_ci(
-                Xj_thread, yj_thread, trt, grid,
+                Xj_eval, yj_eval, trt, grid,
                 1, alpha, type, q, ns,
                 ridge, scm, lambda;
                 init_weights = base_weights,
@@ -2269,31 +2716,41 @@ function _conformal!(X::AbstractMatrix{Float64}, y::AbstractMatrix{Float64},
         ci_weights = base_weights
         final_weights = ci_weights
         for j in 1:tpost
-            Xj[:, 1:t0] .= X
-            @views Xj[:, t0 + 1] .= y[:, j]
-            if tpost > 1
-                if j == 1
-                    @views yj[:, 1:(tpost - 1)] .= y[:, 2:tpost]
-                elseif j == tpost
-                    @views yj[:, 1:(tpost - 1)] .= y[:, 1:(tpost - 1)]
-                else
-                    @views yj[:, 1:(j - 1)] .= y[:, 1:(j - 1)]
-                    @views yj[:, j:(tpost - 1)] .= y[:, (j + 1):tpost]
-                end
+            Xj_eval, yj_eval, conf_cache = if use_pointwise_stats
+                cache = _pointwise_conformal_cache(pointwise_stats, j)
+                (_placeholder_X(cache), _placeholder_y(cache), cache)
             else
-                fill!(yj, 1.0)
-            end
+                Xj[:, 1:t0] .= X
+                @views Xj[:, t0 + 1] .= y[:, j]
+                if tpost > 1
+                    if j == 1
+                        @views yj[:, 1:(tpost - 1)] .= y[:, 2:tpost]
+                    elseif j == tpost
+                        @views yj[:, 1:(tpost - 1)] .= y[:, 1:(tpost - 1)]
+                    else
+                        @views yj[:, 1:(j - 1)] .= y[:, 1:(j - 1)]
+                        @views yj[:, j:(tpost - 1)] .= y[:, (j + 1):tpost]
+                    end
+                else
+                    fill!(yj, 1.0)
+                end
 
-            conf_cache = _conformal_build_cache(
-                Xj, yj, trt;
-                V = V, fixedeff = fixedeff
-            )
+                cache = if !ridge && scm
+                    _conformal_build_cache(
+                        Xj, yj, trt;
+                        V = V, fixedeff = fixedeff
+                    )
+                else
+                    nothing
+                end
+                (Xj, yj, cache)
+            end
 
             grid = collect(
                 range(base_att[t0 + j] - 2 * post_sd, stop = base_att[t0 + j] + 2 * post_sd, length = grid_size)
             )
             lo, hi, pv, ci_weights = _compute_permute_ci(
-                Xj, yj, trt, grid,
+                Xj_eval, yj_eval, trt, grid,
                 1, alpha, type, q, ns,
                 ridge, scm, lambda;
                 init_weights = ci_weights,

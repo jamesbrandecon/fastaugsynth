@@ -1,13 +1,13 @@
 "case_id","case_label","package","rep","elapsed_sec","donors","pre_periods","post_periods"
 "small","Small
-20 donors, 40 pre, 20 post","fastaugsynth",1,0.006,20,40,20
+20 donors, 40 pre, 20 post","fastaugsynth",1,0.00500000000000012,20,40,20
 "small","Small
-20 donors, 40 pre, 20 post","augsynth",1,8.78,20,40,20
+20 donors, 40 pre, 20 post","augsynth",1,8.569,20,40,20
 "medium","Medium
-40 donors, 80 pre, 40 post","fastaugsynth",1,0.081999999999999,40,80,40
+40 donors, 80 pre, 40 post","fastaugsynth",1,0.0109999999999992,40,80,40
 "medium","Medium
-40 donors, 80 pre, 40 post","augsynth",1,23.674,40,80,40
+40 donors, 80 pre, 40 post","augsynth",1,23.117,40,80,40
 "large","Large
-140 donors, 180 pre, 90 post","fastaugsynth",1,0.359999999999999,140,180,90
+140 donors, 180 pre, 90 post","fastaugsynth",1,0.213000000000001,140,180,90
 "large","Large
-140 donors, 180 pre, 90 post","augsynth",1,118.358,140,180,90
+140 donors, 180 pre, 90 post","augsynth",1,115.017,140,180,90
